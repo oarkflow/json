@@ -3,23 +3,23 @@ package jsonschema
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
-	
+
 	"github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
 )
 
 var notSupported = map[string]bool{
 	// core
 	"$vocabulary": true,
-	
+
 	// other
 	"contentEncoding":  true,
 	"contentMediaType": true,
 	"contentSchema":    true,
 	"deprecated":       true,
-	
+
 	// backward compatibility with draft7
 	"definitions":  true,
 	"dependencies": true,
@@ -61,19 +61,19 @@ func (r *KeywordRegistry) Copy() *KeywordRegistry {
 		keywordOrder:       make(map[string]int, len(r.keywordOrder)),
 		keywordInsertOrder: make(map[string]int, len(r.keywordInsertOrder)),
 	}
-	
+
 	for k, v := range r.keywordRegistry {
 		dest.keywordRegistry[k] = v
 	}
-	
+
 	for k, v := range r.keywordOrder {
 		dest.keywordOrder[k] = v
 	}
-	
+
 	for k, v := range r.keywordInsertOrder {
 		dest.keywordInsertOrder[k] = v
 	}
-	
+
 	return dest
 }
 
@@ -119,7 +119,7 @@ func (r *KeywordRegistry) SetKeywordOrder(prop string, order int) {
 func SetKeywordOrder(prop string, order int) {
 	r, release := getGlobalKeywordRegistry()
 	defer release()
-	
+
 	r.SetKeywordOrder(prop, order)
 }
 
@@ -145,7 +145,7 @@ func (r *KeywordRegistry) RegisterKeyword(prop string, maker KeyMaker) {
 func RegisterKeyword(prop string, maker KeyMaker) {
 	r, release := getGlobalKeywordRegistry()
 	defer release()
-	
+
 	r.RegisterKeyword(prop, maker)
 }
 
@@ -160,7 +160,7 @@ type Keyword interface {
 	// ValidateKeyword checks decoded JSON data and writes
 	// validation errors (if any) to an outparam slice of KeyErrors
 	ValidateKeyword(ctx context.Context, currentState *ValidationState, data interface{})
-	
+
 	// Register builds up the schema tree by evaluating the current key
 	// and the current location pointer which is later used with resolve to
 	// navigate the schema tree and substitute the propper schema for a given
@@ -208,7 +208,7 @@ func (v KeyError) Error() string {
 
 // InvalidValueString returns the errored value as a string
 func InvalidValueString(data interface{}) string {
-	bt, err := json.Marshal(data)
+	bt, err := marshaler.Instance()(data)
 	if err != nil {
 		return ""
 	}

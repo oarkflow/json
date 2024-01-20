@@ -2,13 +2,14 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"sync"
+
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 var lr *LoaderRegistry
@@ -115,7 +116,7 @@ func HTTPSchemaLoader(ctx context.Context, uri *url.URL, schema *Schema) error {
 	if schema == nil {
 		schema = &Schema{}
 	}
-	return json.Unmarshal(body, schema)
+	return unmarshaler.Instance()(body, schema)
 }
 
 // FileSchemaLoader loads a schema from a file URI
@@ -127,5 +128,5 @@ func FileSchemaLoader(ctx context.Context, uri *url.URL, schema *Schema) error {
 	if schema == nil {
 		schema = &Schema{}
 	}
-	return json.Unmarshal(body, schema)
+	return unmarshaler.Instance()(body, schema)
 }

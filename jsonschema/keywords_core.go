@@ -2,12 +2,13 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // SchemaURI defines the $schema JSON Schema keyword
@@ -142,7 +143,7 @@ func (d *Default) Resolve(pointer jptr.Pointer, uri string) *Schema {
 // UnmarshalJSON implements the json.Unmarshaler interface for Default
 func (d *Default) UnmarshalJSON(data []byte) error {
 	var defaultData interface{}
-	if err := json.Unmarshal(data, &defaultData); err != nil {
+	if err := unmarshaler.Instance()(data, &defaultData); err != nil {
 		return err
 	}
 	*d = Default{
@@ -237,7 +238,7 @@ func (r *Ref) ValidateKeyword(ctx context.Context, currentState *ValidationState
 			currentState.AddError(data, fmt.Sprintf("failed to resolve schema for ref %s", r.reference))
 		}
 	}
-	
+
 	subState := currentState.NewSubState()
 	subState.ClearState()
 	if r.resolvedRoot != nil {
@@ -248,9 +249,9 @@ func (r *Ref) ValidateKeyword(ctx context.Context, currentState *ValidationState
 		subState.BaseRelativeLocation = r.resolvedFragment
 	}
 	subState.DescendRelative("$ref")
-	
+
 	r.resolved.ValidateKeyword(ctx, subState, data)
-	
+
 	currentState.UpdateEvaluatedPropsAndItems(subState)
 }
 
@@ -262,7 +263,7 @@ func (r *Ref) _resolveRef(ctx context.Context, currentState *ValidationState) {
 			return
 		}
 	}
-	
+
 	docPath := currentState.BaseURI
 	refParts := strings.Split(r.reference, "#")
 	address := ""
@@ -287,7 +288,7 @@ func (r *Ref) _resolveRef(ctx context.Context, currentState *ValidationState) {
 	} else {
 		r.resolvedFragment = &jptr.Pointer{}
 	}
-	
+
 	if address != "" {
 		if u, err := url.Parse(address); err == nil {
 			if !u.IsAbs() {
@@ -310,17 +311,17 @@ func (r *Ref) _resolveRef(ctx context.Context, currentState *ValidationState) {
 	} else {
 		r.resolvedRoot = currentState.Root
 	}
-	
+
 	if r.resolvedRoot == nil {
 		return
 	}
-	
+
 	knownSchema := currentState.TopSchemaRegistry.GetKnown(r.reference)
 	if knownSchema != nil {
 		r.resolved = knownSchema
 		return
 	}
-	
+
 	localURI := currentState.BaseURI
 	if r.resolvedRoot != nil && r.resolvedRoot.docPath != "" {
 		localURI = r.resolvedRoot.docPath
@@ -342,7 +343,7 @@ func (r *Ref) _resolveLocalRef(uri string) {
 		r.resolved = r.resolvedRoot
 		return
 	}
-	
+
 	if r.resolvedRoot != nil {
 		r.resolved = r.resolvedRoot.Resolve(*r.resolvedFragment, uri)
 	}
@@ -359,7 +360,7 @@ func (r *Ref) Resolve(pointer jptr.Pointer, uri string) *Schema {
 // UnmarshalJSON implements the json.Unmarshaler interface for Ref
 func (r *Ref) UnmarshalJSON(data []byte) error {
 	var ref string
-	if err := json.Unmarshal(data, &ref); err != nil {
+	if err := unmarshaler.Instance()(data, &ref); err != nil {
 		return err
 	}
 	normalizedRef, _ := url.QueryUnescape(ref)
@@ -371,7 +372,7 @@ func (r *Ref) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for Ref
 func (r Ref) MarshalJSON() ([]byte, error) {
-	return json.Marshal(r.reference)
+	return marshaler.Instance()(r.reference)
 }
 
 // RecursiveRef defines the $recursiveRef JSON Schema keyword
@@ -380,7 +381,7 @@ type RecursiveRef struct {
 	resolved         *Schema
 	resolvedRoot     *Schema
 	resolvedFragment *jptr.Pointer
-	
+
 	validatingLocations map[string]bool
 }
 
@@ -396,14 +397,14 @@ func (r *RecursiveRef) ValidateKeyword(ctx context.Context, currentState *Valida
 		// recursion detected aborting further descent
 		return
 	}
-	
+
 	if r.resolved == nil {
 		r._resolveRef(ctx, currentState)
 		if r.resolved == nil {
 			currentState.AddError(data, fmt.Sprintf("failed to resolve schema for ref %s", r.reference))
 		}
 	}
-	
+
 	subState := currentState.NewSubState()
 	subState.ClearState()
 	if r.resolvedRoot != nil {
@@ -414,15 +415,15 @@ func (r *RecursiveRef) ValidateKeyword(ctx context.Context, currentState *Valida
 		subState.BaseRelativeLocation = r.resolvedFragment
 	}
 	subState.DescendRelative("$recursiveRef")
-	
+
 	if r.validatingLocations == nil {
 		r.validatingLocations = map[string]bool{}
 	}
-	
+
 	r.validatingLocations[currentState.InstanceLocation.String()] = true
 	r.resolved.ValidateKeyword(ctx, subState, data)
 	r.validatingLocations[currentState.InstanceLocation.String()] = false
-	
+
 	currentState.UpdateEvaluatedPropsAndItems(subState)
 }
 
@@ -449,19 +450,19 @@ func (r *RecursiveRef) _resolveRef(ctx context.Context, currentState *Validation
 			r.resolvedRoot = currentState.RecursiveAnchor
 		}
 	}
-	
+
 	if IsLocalSchemaID(r.reference) {
 		r.resolved = currentState.LocalRegistry.GetLocal(r.reference)
 		if r.resolved != nil {
 			return
 		}
 	}
-	
+
 	docPath := currentState.BaseURI
 	if r.resolvedRoot != nil && r.resolvedRoot.docPath != "" {
 		docPath = r.resolvedRoot.docPath
 	}
-	
+
 	refParts := strings.Split(r.reference, "#")
 	address := ""
 	if refParts != nil && len(strings.TrimSpace(refParts[0])) > 0 {
@@ -469,9 +470,9 @@ func (r *RecursiveRef) _resolveRef(ctx context.Context, currentState *Validation
 	} else {
 		address = docPath
 	}
-	
+
 	if len(refParts) > 1 {
-		
+
 		fragPointer, err := jptr.Parse(refParts[1])
 		if err != nil {
 			r.resolvedFragment = &jptr.Pointer{}
@@ -481,7 +482,7 @@ func (r *RecursiveRef) _resolveRef(ctx context.Context, currentState *Validation
 	} else {
 		r.resolvedFragment = &jptr.Pointer{}
 	}
-	
+
 	if r.resolvedRoot == nil {
 		if address != "" {
 			if u, err := url.Parse(address); err == nil {
@@ -506,17 +507,17 @@ func (r *RecursiveRef) _resolveRef(ctx context.Context, currentState *Validation
 			r.resolvedRoot = currentState.Root
 		}
 	}
-	
+
 	if r.resolvedRoot == nil {
 		return
 	}
-	
+
 	knownSchema := currentState.TopSchemaRegistry.GetKnown(r.reference)
 	if knownSchema != nil {
 		r.resolved = knownSchema
 		return
 	}
-	
+
 	localURI := currentState.BaseURI
 	if r.resolvedRoot != nil && r.resolvedRoot.docPath != "" {
 		localURI = r.resolvedRoot.docPath
@@ -530,7 +531,7 @@ func (r *RecursiveRef) _resolveLocalRef(uri string) {
 		r.resolved = r.resolvedRoot
 		return
 	}
-	
+
 	if r.resolvedRoot != nil {
 		r.resolved = r.resolvedRoot.Resolve(*r.resolvedFragment, uri)
 	}
@@ -547,7 +548,7 @@ func (r *RecursiveRef) Resolve(pointer jptr.Pointer, uri string) *Schema {
 // UnmarshalJSON implements the json.Unmarshaler interface for RecursiveRef
 func (r *RecursiveRef) UnmarshalJSON(data []byte) error {
 	var ref string
-	if err := json.Unmarshal(data, &ref); err != nil {
+	if err := unmarshaler.Instance()(data, &ref); err != nil {
 		return err
 	}
 	*r = RecursiveRef{
@@ -558,7 +559,7 @@ func (r *RecursiveRef) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for RecursiveRef
 func (r RecursiveRef) MarshalJSON() ([]byte, error) {
-	return json.Marshal(r.reference)
+	return marshaler.Instance()(r.reference)
 }
 
 // Anchor defines the $anchor JSON Schema keyword
@@ -611,7 +612,7 @@ func (r *RecursiveAnchor) ValidateKeyword(ctx context.Context, currentState *Val
 // UnmarshalJSON implements the json.Unmarshaler interface for RecursiveAnchor
 func (r *RecursiveAnchor) UnmarshalJSON(data []byte) error {
 	sch := &Schema{}
-	if err := json.Unmarshal(data, sch); err != nil {
+	if err := unmarshaler.Instance()(data, sch); err != nil {
 		return err
 	}
 	*r = (RecursiveAnchor)(*sch)
@@ -642,11 +643,11 @@ func (d *Defs) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	if schema, ok := (*d)[*current]; ok {
 		return schema.Resolve(pointer.Tail(), uri)
 	}
-	
+
 	return nil
 }
 

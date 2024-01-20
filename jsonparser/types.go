@@ -1,8 +1,10 @@
 package jsonparser
 
 import (
-	"encoding/json"
 	"fmt"
+
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 type Enum any
@@ -40,25 +42,25 @@ func (l PrimitiveTypeList) Swap(i, j int) {
 
 func (l *PrimitiveTypeList) MarshalJSON() ([]byte, error) {
 	if len(*l) == 1 {
-		return json.Marshal((*l)[0])
+		return marshaler.Instance()((*l)[0])
 	}
-	return json.Marshal([]PrimitiveType(*l))
+	return marshaler.Instance()([]PrimitiveType(*l))
 }
 
 func (l *PrimitiveTypeList) UnmarshalJSON(buf []byte) error {
 	var sl []string
 	if len(buf) > 0 && buf[0] == '[' {
-		if err := json.Unmarshal(buf, &sl); err != nil {
+		if err := unmarshaler.Instance()(buf, &sl); err != nil {
 			return fmt.Errorf("failed to parse primitive types list: %w", err)
 		}
 	} else {
 		var s string
-		if err := json.Unmarshal(buf, &s); err != nil {
+		if err := unmarshaler.Instance()(buf, &s); err != nil {
 			return fmt.Errorf("failed to parse primitive types list: %w", err)
 		}
 		sl = []string{s}
 	}
-	
+
 	ptl := make(PrimitiveTypeList, 0, len(sl))
 	for _, s := range sl {
 		var pt PrimitiveType
@@ -82,7 +84,7 @@ func (l *PrimitiveTypeList) UnmarshalJSON(buf []byte) error {
 		}
 		ptl = append(ptl, pt)
 	}
-	
+
 	*l = ptl
 	return nil
 }

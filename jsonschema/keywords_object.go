@@ -2,12 +2,13 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // Properties defines the properties JSON Schema keyword
@@ -34,11 +35,11 @@ func (p *Properties) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	if schema, ok := (*p)[*current]; ok {
 		return schema.Resolve(pointer.Tail(), uri)
 	}
-	
+
 	return nil
 }
 
@@ -54,7 +55,7 @@ func (p Properties) ValidateKeyword(ctx context.Context, currentState *Validatio
 				subState.DescendBaseFromState(currentState, "properties", key)
 				subState.DescendRelativeFromState(currentState, "properties", key)
 				subState.DescendInstanceFromState(currentState, key)
-				
+
 				subState.Errs = &[]KeyError{}
 				p[key].ValidateKeyword(ctx, subState, obj[key])
 				currentState.AddSubErrors(*subState.Errs...)
@@ -202,16 +203,16 @@ func (p *PatternProperties) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	patProp := &patternSchema{}
-	
+
 	for _, v := range *p {
 		if v.key == *current {
 			patProp = &v
 			break
 		}
 	}
-	
+
 	return patProp.schema.Resolve(pointer.Tail(), uri)
 }
 
@@ -227,11 +228,11 @@ func (p PatternProperties) ValidateKeyword(ctx context.Context, currentState *Va
 					subState.DescendBase("patternProperties", key)
 					subState.DescendRelative("patternProperties", key)
 					subState.DescendInstance(key)
-					
+
 					subState.Errs = &[]KeyError{}
 					ptn.schema.ValidateKeyword(ctx, subState, val)
 					currentState.AddSubErrors(*subState.Errs...)
-					
+
 					if subState.IsValid() {
 						currentState.UpdateEvaluatedPropsAndItems(subState)
 					}
@@ -263,10 +264,10 @@ func (p PatternProperties) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for PatternProperties
 func (p *PatternProperties) UnmarshalJSON(data []byte) error {
 	var props map[string]*Schema
-	if err := json.Unmarshal(data, &props); err != nil {
+	if err := unmarshaler.Instance()(data, &props); err != nil {
 		return err
 	}
-	
+
 	ptn := make(PatternProperties, len(props))
 	i := 0
 	for key, sch := range props {
@@ -281,7 +282,7 @@ func (p *PatternProperties) UnmarshalJSON(data []byte) error {
 		}
 		i++
 	}
-	
+
 	*p = ptn
 	return nil
 }
@@ -292,7 +293,7 @@ func (p PatternProperties) MarshalJSON() ([]byte, error) {
 	for _, prop := range p {
 		obj[prop.key] = prop.schema
 	}
-	return json.Marshal(obj)
+	return marshaler.Instance()(obj)
 }
 
 // AdditionalProperties defines the additionalProperties JSON Schema keyword
@@ -325,16 +326,16 @@ func (ap *AdditionalProperties) ValidateKeyword(ctx context.Context, currentStat
 			if currentState.IsLocallyEvaluatedKey(key) {
 				continue
 			}
-			
+
 			currentState.SetEvaluatedKey(key)
 			subState.ClearState()
 			subState.DescendInstanceFromState(currentState, key)
-			
+
 			if ap.schemaType == schemaTypeFalse {
 				subState.AddError(data, "additional properties are not allowed")
 				return
 			}
-			
+
 			(*Schema)(ap).ValidateKeyword(ctx, subState, obj[key])
 			currentState.UpdateEvaluatedPropsAndItems(subState)
 		}
@@ -344,7 +345,7 @@ func (ap *AdditionalProperties) ValidateKeyword(ctx context.Context, currentStat
 // UnmarshalJSON implements the json.Unmarshaler interface for AdditionalProperties
 func (ap *AdditionalProperties) UnmarshalJSON(data []byte) error {
 	sch := &Schema{}
-	if err := json.Unmarshal(data, sch); err != nil {
+	if err := unmarshaler.Instance()(data, sch); err != nil {
 		return err
 	}
 	*ap = (AdditionalProperties)(*sch)
@@ -353,7 +354,7 @@ func (ap *AdditionalProperties) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for AdditionalProperties
 func (ap AdditionalProperties) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(ap))
+	return marshaler.Instance()(Schema(ap))
 }
 
 // PropertyNames defines the propertyNames JSON Schema keyword
@@ -401,7 +402,7 @@ func (p PropertyNames) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for PropertyNames
 func (p *PropertyNames) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*p = PropertyNames(sch)
@@ -410,7 +411,7 @@ func (p *PropertyNames) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for PropertyNames
 func (p PropertyNames) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(p))
+	return marshaler.Instance()(Schema(p))
 }
 
 // DependentSchemas defines the dependentSchemas JSON Schema keyword
@@ -437,11 +438,11 @@ func (d *DependentSchemas) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	if schema, ok := (*d)[*current]; ok {
 		return schema.Resolve(pointer.Tail(), uri)
 	}
-	
+
 	return nil
 }
 
@@ -462,7 +463,7 @@ type _dependentSchemas map[string]Schema
 // UnmarshalJSON implements the json.Unmarshaler interface for DependentSchemas
 func (d *DependentSchemas) UnmarshalJSON(data []byte) error {
 	_d := _dependentSchemas{}
-	if err := json.Unmarshal(data, &_d); err != nil {
+	if err := unmarshaler.Instance()(data, &_d); err != nil {
 		return err
 	}
 	ds := DependentSchemas{}
@@ -526,7 +527,7 @@ func (d *SchemaDependency) ValidateKeyword(ctx context.Context, currentState *Va
 
 // MarshalJSON implements the json.Marshaler interface for SchemaDependency
 func (d SchemaDependency) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.schema)
+	return marshaler.Instance()(d.schema)
 }
 
 // JSONProp implements the JSONPather for SchemaDependency
@@ -567,7 +568,7 @@ type _dependentRequired map[string][]string
 // UnmarshalJSON implements the json.Unmarshaler interface for DependentRequired
 func (d *DependentRequired) UnmarshalJSON(data []byte) error {
 	_d := _dependentRequired{}
-	if err := json.Unmarshal(data, &_d); err != nil {
+	if err := unmarshaler.Instance()(data, &_d); err != nil {
 		return err
 	}
 	dr := DependentRequired{}
@@ -587,7 +588,7 @@ func (d DependentRequired) MarshalJSON() ([]byte, error) {
 	for key, prop := range d {
 		obj[key] = prop.dependencies
 	}
-	return json.Marshal(obj)
+	return marshaler.Instance()(obj)
 }
 
 // JSONProp implements the JSONPather for DependentRequired
@@ -680,7 +681,7 @@ func (up *UnevaluatedProperties) ValidateKeyword(ctx context.Context, currentSta
 				return
 			}
 			subState.DescendInstanceFromState(currentState, key)
-			
+
 			(*Schema)(up).ValidateKeyword(ctx, subState, obj[key])
 		}
 	}
@@ -689,7 +690,7 @@ func (up *UnevaluatedProperties) ValidateKeyword(ctx context.Context, currentSta
 // UnmarshalJSON implements the json.Unmarshaler interface for UnevaluatedProperties
 func (up *UnevaluatedProperties) UnmarshalJSON(data []byte) error {
 	sch := &Schema{}
-	if err := json.Unmarshal(data, sch); err != nil {
+	if err := unmarshaler.Instance()(data, sch); err != nil {
 		return err
 	}
 	*up = (UnevaluatedProperties)(*sch)

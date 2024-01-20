@@ -2,8 +2,10 @@ package jsonparser
 
 import (
 	"bytes"
-	json "encoding/json"
 	"fmt"
+
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // Schema is a JSON Schema draft-07 document (as specified in
@@ -91,7 +93,7 @@ func (s *Schema) MarshalJSON() ([]byte, error) {
 		return trueBytes, nil
 	}
 	type schema2 Schema
-	return json.Marshal((*schema2)(s))
+	return marshaler.Instance()((*schema2)(s))
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -104,7 +106,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		*s = Schema{IsNegated: true, Raw: raw}
 	default:
 		type schema2 Schema
-		if err := json.Unmarshal(data, (*schema2)(s)); err != nil {
+		if err := unmarshaler.Instance()(data, (*schema2)(s)); err != nil {
 			return fmt.Errorf("failed to unmarshal JSON Schema: %w", err)
 		}
 		s.Raw = raw
@@ -128,17 +130,17 @@ type SchemaOrSchemaList struct {
 // MarshalJSON implements json.Marshaler.
 func (s *SchemaOrSchemaList) MarshalJSON() ([]byte, error) {
 	if s.Schema != nil {
-		return json.Marshal(s.Schema)
+		return marshaler.Instance()(s.Schema)
 	}
-	return json.Marshal(s.Schemas)
+	return marshaler.Instance()(s.Schemas)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (s *SchemaOrSchemaList) UnmarshalJSON(data []byte) error {
 	if len(data) > 0 && data[0] == '[' {
-		return json.Unmarshal(data, &s.Schemas)
+		return unmarshaler.Instance()(data, &s.Schemas)
 	}
-	return json.Unmarshal(data, &s.Schema)
+	return unmarshaler.Instance()(data, &s.Schema)
 }
 
 type DependencyValue struct {
@@ -149,16 +151,16 @@ type DependencyValue struct {
 // MarshalJSON implements json.Marshaler.
 func (v *DependencyValue) MarshalJSON() ([]byte, error) {
 	if v.Schema != nil {
-		return json.Marshal(v.Schema)
+		return marshaler.Instance()(v.Schema)
 	}
-	return json.Marshal(v.RequiredProperties)
+	return marshaler.Instance()(v.RequiredProperties)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *DependencyValue) UnmarshalJSON(data []byte) error {
 	*v = DependencyValue{}
 	if len(data) > 0 && data[0] == '[' {
-		return json.Unmarshal(data, &v.RequiredProperties)
+		return unmarshaler.Instance()(data, &v.RequiredProperties)
 	}
-	return json.Unmarshal(data, &v.Schema)
+	return unmarshaler.Instance()(data, &v.Schema)
 }

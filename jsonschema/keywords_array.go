@@ -2,12 +2,13 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // Items defines the items JSON Schema keyword
@@ -37,16 +38,16 @@ func (it *Items) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	pos, err := strconv.Atoi(*current)
 	if err != nil {
 		return nil
 	}
-	
+
 	if pos < 0 || pos >= len(it.Schemas) {
 		return nil
 	}
-	
+
 	return it.Schemas[pos].Resolve(pointer.Tail(), uri)
 }
 
@@ -75,7 +76,7 @@ func (it Items) ValidateKeyword(ctx context.Context, currentState *ValidationSta
 					subState.ClearState()
 					subState.DescendRelativeFromState(currentState, "items", strconv.Itoa(i))
 					subState.DescendInstanceFromState(currentState, strconv.Itoa(i))
-					
+
 					vs.ValidateKeyword(ctx, subState, arr[i])
 					subState.SetEvaluatedIndex(i)
 					currentState.UpdateEvaluatedPropsAndItems(subState)
@@ -109,12 +110,12 @@ func (it Items) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for Items
 func (it *Items) UnmarshalJSON(data []byte) error {
 	s := &Schema{}
-	if err := json.Unmarshal(data, s); err == nil {
+	if err := unmarshaler.Instance()(data, s); err == nil {
 		*it = Items{single: true, Schemas: []*Schema{s}}
 		return nil
 	}
 	ss := []*Schema{}
-	if err := json.Unmarshal(data, &ss); err != nil {
+	if err := unmarshaler.Instance()(data, &ss); err != nil {
 		return err
 	}
 	*it = Items{Schemas: ss}
@@ -124,9 +125,9 @@ func (it *Items) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements the json.Marshaler interface for Items
 func (it Items) MarshalJSON() ([]byte, error) {
 	if it.single {
-		return json.Marshal(it.Schemas[0])
+		return marshaler.Instance()(it.Schemas[0])
 	}
-	return json.Marshal([]*Schema(it.Schemas))
+	return marshaler.Instance()([]*Schema(it.Schemas))
 }
 
 // MaxItems defines the maxItems JSON Schema keyword
@@ -276,7 +277,7 @@ func (c Contains) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for Contains
 func (c *Contains) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*c = Contains(sch)
@@ -373,7 +374,7 @@ func (ai *AdditionalItems) ValidateKeyword(ctx context.Context, currentState *Va
 				subState.DescendBase("additionalItems")
 				subState.DescendRelative("additionalItems")
 				subState.DescendInstance(strconv.Itoa(i))
-				
+
 				(*Schema)(ai).ValidateKeyword(ctx, subState, arr[i])
 				currentState.UpdateEvaluatedPropsAndItems(subState)
 			}
@@ -384,7 +385,7 @@ func (ai *AdditionalItems) ValidateKeyword(ctx context.Context, currentState *Va
 // UnmarshalJSON implements the json.Unmarshaler interface for AdditionalItems
 func (ai *AdditionalItems) UnmarshalJSON(data []byte) error {
 	sch := &Schema{}
-	if err := json.Unmarshal(data, sch); err != nil {
+	if err := unmarshaler.Instance()(data, sch); err != nil {
 		return err
 	}
 	*ai = (AdditionalItems)(*sch)
@@ -424,7 +425,7 @@ func (ui *UnevaluatedItems) ValidateKeyword(ctx context.Context, currentState *V
 				subState.DescendBase("unevaluatedItems")
 				subState.DescendRelative("unevaluatedItems")
 				subState.DescendInstance(strconv.Itoa(i))
-				
+
 				(*Schema)(ui).ValidateKeyword(ctx, subState, arr[i])
 			}
 		}
@@ -434,7 +435,7 @@ func (ui *UnevaluatedItems) ValidateKeyword(ctx context.Context, currentState *V
 // UnmarshalJSON implements the json.Unmarshaler interface for UnevaluatedItems
 func (ui *UnevaluatedItems) UnmarshalJSON(data []byte) error {
 	sch := &Schema{}
-	if err := json.Unmarshal(data, sch); err != nil {
+	if err := unmarshaler.Instance()(data, sch); err != nil {
 		return err
 	}
 	*ui = (UnevaluatedItems)(*sch)

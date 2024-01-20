@@ -7,8 +7,10 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // Const defines the const JSON Schema keyword
@@ -31,11 +33,11 @@ func (c *Const) Resolve(pointer jptr.Pointer, uri string) *Schema {
 func (c Const) ValidateKeyword(ctx context.Context, currentState *ValidationState, data interface{}) {
 	schemaDebug("[Const] Validating")
 	var con interface{}
-	if err := json.Unmarshal(c, &con); err != nil {
+	if err := unmarshaler.Instance()(c, &con); err != nil {
 		currentState.AddError(data, err.Error())
 		return
 	}
-	
+
 	if !reflect.DeepEqual(con, data) {
 		currentState.AddError(data, fmt.Sprintf(`must equal %s`, InvalidValueString(con)))
 	}
@@ -59,7 +61,7 @@ func (c *Const) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for Const
 func (c Const) MarshalJSON() ([]byte, error) {
-	return json.Marshal(json.RawMessage(c))
+	return marshaler.Instance()(json.RawMessage(c))
 }
 
 // Enum defines the enum JSON Schema keyword
@@ -90,7 +92,7 @@ func (e Enum) ValidateKeyword(ctx context.Context, currentState *ValidationState
 			return
 		}
 	}
-	
+
 	currentState.AddError(data, fmt.Sprintf("should be one of %s", e.String()))
 }
 
@@ -141,11 +143,11 @@ func DataType(data interface{}) string {
 	if data == nil {
 		return "null"
 	}
-	
+
 	switch reflect.TypeOf(data).Kind() {
 	case reflect.Bool:
 		return "boolean"
-	
+
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uintptr:
 		return "integer"
@@ -227,12 +229,12 @@ func (t Type) ValidateKeyword(ctx context.Context, currentState *ValidationState
 		currentState.AddError(data, fmt.Sprintf(`type should be %s, got %s`, t.vals[0], jt))
 		return
 	}
-	
+
 	str := ""
 	for _, ts := range t.vals {
 		str += ts + ","
 	}
-	
+
 	currentState.AddError(data, fmt.Sprintf(`type should be one of: %s, got %s`, str[:len(str)-1], jt))
 }
 
@@ -259,17 +261,17 @@ func (t Type) JSONProp(name string) interface{} {
 // UnmarshalJSON implements the json.Unmarshaler interface for Type
 func (t *Type) UnmarshalJSON(data []byte) error {
 	var single string
-	if err := json.Unmarshal(data, &single); err == nil {
+	if err := unmarshaler.Instance()(data, &single); err == nil {
 		*t = Type{strVal: true, vals: []string{single}}
 	} else {
 		var set []string
-		if err := json.Unmarshal(data, &set); err == nil {
+		if err := unmarshaler.Instance()(data, &set); err == nil {
 			*t = Type{vals: set}
 		} else {
 			return err
 		}
 	}
-	
+
 	for _, pr := range t.vals {
 		if !primitiveTypes[pr] {
 			return fmt.Errorf(`"%s" is not a valid type`, pr)
@@ -281,7 +283,7 @@ func (t *Type) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements the json.Marshaler interface for Type
 func (t Type) MarshalJSON() ([]byte, error) {
 	if t.strVal {
-		return json.Marshal(t.vals[0])
+		return marshaler.Instance()(t.vals[0])
 	}
-	return json.Marshal(t.vals)
+	return marshaler.Instance()(t.vals)
 }

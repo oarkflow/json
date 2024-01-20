@@ -2,10 +2,11 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // AllOf defines the allOf JSON Schema keyword
@@ -32,16 +33,16 @@ func (a *AllOf) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	pos, err := strconv.Atoi(*current)
 	if err != nil {
 		return nil
 	}
-	
+
 	if pos < 0 || pos >= len(*a) {
 		return nil
 	}
-	
+
 	return (*a)[pos].Resolve(pointer.Tail(), uri)
 }
 
@@ -114,16 +115,16 @@ func (a *AnyOf) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	pos, err := strconv.Atoi(*current)
 	if err != nil {
 		return nil
 	}
-	
+
 	if pos < 0 || pos >= len(*a) {
 		return nil
 	}
-	
+
 	return (*a)[pos].Resolve(pointer.Tail(), uri)
 }
 
@@ -142,7 +143,7 @@ func (a *AnyOf) ValidateKeyword(ctx context.Context, currentState *ValidationSta
 			return
 		}
 	}
-	
+
 	currentState.AddError(data, "did Not match any specified AnyOf schemas")
 }
 
@@ -191,16 +192,16 @@ func (o *OneOf) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if current == nil {
 		return nil
 	}
-	
+
 	pos, err := strconv.Atoi(*current)
 	if err != nil {
 		return nil
 	}
-	
+
 	if pos < 0 || pos >= len(*o) {
 		return nil
 	}
-	
+
 	return (*o)[pos].Resolve(pointer.Tail(), uri)
 }
 
@@ -278,7 +279,7 @@ func (n *Not) ValidateKeyword(ctx context.Context, currentState *ValidationState
 	subState := currentState.NewSubState()
 	subState.DescendBase("not")
 	subState.DescendRelative("not")
-	
+
 	subState.Errs = &[]KeyError{}
 	sch := Schema(*n)
 	sch.ValidateKeyword(ctx, subState, data)
@@ -300,7 +301,7 @@ func (n Not) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for Not
 func (n *Not) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*n = Not(sch)
@@ -309,5 +310,5 @@ func (n *Not) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for Not
 func (n Not) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(n))
+	return marshaler.Instance()(Schema(n))
 }

@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // Must turns a JSON string into a *Schema, panicing if parsing fails.
@@ -193,7 +195,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	}
 
 	var b bool
-	if err := json.Unmarshal(data, &b); err == nil {
+	if err := unmarshaler.Instance()(data, &b); err == nil {
 		if b {
 			// boolean true Always passes validation, as if the empty schema {}
 			*s = Schema{schemaType: schemaTypeTrue, topSchemaRegistry: s.topSchemaRegistry}
@@ -208,7 +210,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	keywordRegistry.DefaultIfEmpty()
 
 	_s := _schema{}
-	if err := json.Unmarshal(data, &_s); err != nil {
+	if err := unmarshaler.Instance()(data, &_s); err != nil {
 		return err
 	}
 
@@ -219,7 +221,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	}
 
 	valprops := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &valprops); err != nil {
+	if err := unmarshaler.Instance()(data, &valprops); err != nil {
 		return err
 	}
 
@@ -238,7 +240,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 			continue
 		}
 		if _, ok := keyword.(*Void); !ok {
-			if err := json.Unmarshal(rawmsg, keyword); err != nil {
+			if err := unmarshaler.Instance()(rawmsg, keyword); err != nil {
 				return fmt.Errorf("error unmarshaling %s from json: %s", prop, err.Error())
 			}
 		}
@@ -349,7 +351,7 @@ func (s *Schema) validateSchemakeywords(ctx context.Context, currentState *Valid
 // byte data
 func (s *Schema) ValidateBytes(ctx context.Context, data []byte) ([]KeyError, error) {
 	var doc interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
+	if err := unmarshaler.Instance()(data, &doc); err != nil {
 		return nil, fmt.Errorf("error parsing JSON bytes: %w", err)
 	}
 	vs := s.Validate(ctx, doc)
@@ -363,7 +365,7 @@ func (s *Schema) ValidateBytesToDst(ctx context.Context, data []byte, dst interf
 		return nil, errors.New("dst is not pointer type")
 	}
 	var doc interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
+	if err := unmarshaler.Instance()(data, &doc); err != nil {
 		return nil, fmt.Errorf("error parsing JSON bytes: %w", err)
 	}
 	vs := s.Validate(ctx, doc)
@@ -397,6 +399,6 @@ func (s Schema) MarshalJSON() ([]byte, error) {
 		for k, v := range s.extraDefinitions {
 			obj[k] = v
 		}
-		return json.Marshal(obj)
+		return marshaler.Instance()(obj)
 	}
 }

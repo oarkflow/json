@@ -2,12 +2,13 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"unicode/utf8"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // MaxLength defines the maxLenght JSON Schema keyword
@@ -92,15 +93,15 @@ func (p Pattern) ValidateKeyword(ctx context.Context, currentState *ValidationSt
 // UnmarshalJSON implements the json.Unmarshaler interface for Pattern
 func (p *Pattern) UnmarshalJSON(data []byte) error {
 	var str string
-	if err := json.Unmarshal(data, &str); err != nil {
+	if err := unmarshaler.Instance()(data, &str); err != nil {
 		return err
 	}
-	
+
 	ptn, err := regexp.Compile(str)
 	if err != nil {
 		return err
 	}
-	
+
 	*p = Pattern(*ptn)
 	return nil
 }
@@ -109,5 +110,5 @@ func (p *Pattern) UnmarshalJSON(data []byte) error {
 func (p Pattern) MarshalJSON() ([]byte, error) {
 	re := regexp.Regexp(p)
 	rep := &re
-	return json.Marshal(rep.String())
+	return marshaler.Instance()(rep.String())
 }

@@ -2,9 +2,10 @@ package jsonschema
 
 import (
 	"context"
-	"encoding/json"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
+	"github.com/oarkflow/json/marshaler"
+	"github.com/oarkflow/json/unmarshaler"
 )
 
 // If defines the if JSON Schema keyword
@@ -30,22 +31,22 @@ func (f *If) ValidateKeyword(ctx context.Context, currentState *ValidationState,
 	schemaDebug("[If] Validating")
 	thenKW := currentState.Local.keywords["then"]
 	elseKW := currentState.Local.keywords["else"]
-	
+
 	if thenKW == nil && elseKW == nil {
 		// no then or else for if, aborting validation
 		schemaDebug("[If] Aborting validation as no then or else is present")
 		return
 	}
-	
+
 	subState := currentState.NewSubState()
 	subState.ClearState()
 	subState.DescendBase("if")
 	subState.DescendRelative("if")
-	
+
 	subState.Errs = &[]KeyError{}
 	sch := Schema(*f)
 	sch.ValidateKeyword(ctx, subState, data)
-	
+
 	currentState.Misc["ifResult"] = subState.IsValid()
 }
 
@@ -62,7 +63,7 @@ func (f If) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for If
 func (f *If) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*f = If(sch)
@@ -71,7 +72,7 @@ func (f *If) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for If
 func (f If) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(f))
+	return marshaler.Instance()(Schema(f))
 }
 
 // Then defines the then JSON Schema keyword
@@ -106,11 +107,11 @@ func (t *Then) ValidateKeyword(ctx context.Context, currentState *ValidationStat
 		// if was false
 		return
 	}
-	
+
 	subState := currentState.NewSubState()
 	subState.DescendBase("then")
 	subState.DescendRelative("then")
-	
+
 	sch := Schema(*t)
 	sch.ValidateKeyword(ctx, subState, data)
 	currentState.UpdateEvaluatedPropsAndItems(subState)
@@ -129,7 +130,7 @@ func (t Then) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for Then
 func (t *Then) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*t = Then(sch)
@@ -138,7 +139,7 @@ func (t *Then) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for Then
 func (t Then) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(t))
+	return marshaler.Instance()(Schema(t))
 }
 
 // Else defines the else JSON Schema keyword
@@ -171,11 +172,11 @@ func (e *Else) ValidateKeyword(ctx context.Context, currentState *ValidationStat
 		// if was true
 		return
 	}
-	
+
 	subState := currentState.NewSubState()
 	subState.DescendBase("else")
 	subState.DescendRelative("else")
-	
+
 	sch := Schema(*e)
 	sch.ValidateKeyword(ctx, subState, data)
 }
@@ -193,7 +194,7 @@ func (e Else) JSONChildren() (res map[string]JSONPather) {
 // UnmarshalJSON implements the json.Unmarshaler interface for Else
 func (e *Else) UnmarshalJSON(data []byte) error {
 	var sch Schema
-	if err := json.Unmarshal(data, &sch); err != nil {
+	if err := unmarshaler.Instance()(data, &sch); err != nil {
 		return err
 	}
 	*e = Else(sch)
@@ -202,5 +203,5 @@ func (e *Else) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for Else
 func (e Else) MarshalJSON() ([]byte, error) {
-	return json.Marshal(Schema(e))
+	return marshaler.Instance()(Schema(e))
 }
