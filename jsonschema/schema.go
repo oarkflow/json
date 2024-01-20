@@ -3,11 +3,13 @@ package jsonschema
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
-	
+
 	jptr "github.com/oarkflow/json/jsonpointer"
 )
 
@@ -34,13 +36,13 @@ type Schema struct {
 	schemaType    schemaType
 	docPath       string
 	hasRegistered bool
-	
+
 	id string
-	
+
 	extraDefinitions map[string]json.RawMessage
 	keywords         map[string]Keyword
 	orderedkeywords  []string
-	
+
 	// topSchemaRegistry will be shared with all children schemas (on unmarshelling)
 	topSchemaRegistry *SchemaRegistry
 }
@@ -80,12 +82,12 @@ func (s *Schema) Register(uri string, registry *SchemaRegistry) {
 	}
 	s.hasRegistered = true
 	registry.RegisterLocal(s)
-	
+
 	// load default keyset if no other is present
 	globalRegistry, release := getGlobalKeywordRegistry()
 	globalRegistry.DefaultIfEmpty()
 	release()
-	
+
 	address := s.id
 	if uri != "" && address != "" {
 		address, _ = SafeResolveURL(uri, address)
@@ -101,7 +103,7 @@ func (s *Schema) Register(uri string, registry *SchemaRegistry) {
 		s.GetSchemaRegistry().Register(s)
 		uri = docURI
 	}
-	
+
 	for _, keyword := range s.keywords {
 		keyword.Register(uri, registry)
 	}
@@ -117,9 +119,9 @@ func (s *Schema) Resolve(pointer jptr.Pointer, uri string) *Schema {
 		}
 		return s
 	}
-	
+
 	current := pointer.Head()
-	
+
 	if s.id != "" {
 		if u, err := url.Parse(s.id); err == nil {
 			if u.IsAbs() {
@@ -129,17 +131,17 @@ func (s *Schema) Resolve(pointer jptr.Pointer, uri string) *Schema {
 			}
 		}
 	}
-	
+
 	keyword := s.keywords[*current]
 	var keywordSchema *Schema
 	if keyword != nil {
 		keywordSchema = keyword.Resolve(pointer.Tail(), uri)
 	}
-	
+
 	if keywordSchema != nil {
 		return keywordSchema
 	}
-	
+
 	found, err := pointer.Eval(s.extraDefinitions)
 	if err != nil {
 		return nil
@@ -147,11 +149,11 @@ func (s *Schema) Resolve(pointer jptr.Pointer, uri string) *Schema {
 	if found == nil {
 		return nil
 	}
-	
+
 	if foundSchema, ok := found.(*Schema); ok {
 		return foundSchema
 	}
-	
+
 	return nil
 }
 
@@ -166,7 +168,7 @@ func (s Schema) JSONProp(name string) interface{} {
 // JSONChildren implements the JSONContainer interface for Schema
 func (s Schema) JSONChildren() map[string]JSONPather {
 	ch := map[string]JSONPather{}
-	
+
 	if s.keywords != nil {
 		for key, val := range s.keywords {
 			if jp, ok := val.(JSONPather); ok {
@@ -174,7 +176,7 @@ func (s Schema) JSONChildren() map[string]JSONPather {
 			}
 		}
 	}
-	
+
 	return ch
 }
 
@@ -189,7 +191,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	if s.topSchemaRegistry == nil {
 		s.GetSchemaRegistry()
 	}
-	
+
 	var b bool
 	if err := json.Unmarshal(data, &b); err == nil {
 		if b {
@@ -201,26 +203,26 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		*s = Schema{schemaType: schemaTypeFalse, topSchemaRegistry: s.topSchemaRegistry}
 		return nil
 	}
-	
+
 	keywordRegistry := copyGlobalKeywordRegistry()
 	keywordRegistry.DefaultIfEmpty()
-	
+
 	_s := _schema{}
 	if err := json.Unmarshal(data, &_s); err != nil {
 		return err
 	}
-	
+
 	sch := &Schema{
 		id:                _s.ID,
 		keywords:          map[string]Keyword{},
 		topSchemaRegistry: s.topSchemaRegistry,
 	}
-	
+
 	valprops := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &valprops); err != nil {
 		return err
 	}
-	
+
 	for prop, rawmsg := range valprops {
 		var keyword Keyword
 		if keywordRegistry.IsRegisteredKeyword(prop) {
@@ -242,7 +244,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		}
 		sch.keywords[prop] = keyword
 	}
-	
+
 	// ensures proper and stable keyword validation order
 	keyOrders := make([]_keyOrder, len(sch.keywords))
 	i := 0
@@ -266,7 +268,7 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 		i++
 	}
 	sch.orderedkeywords = orderedKeys
-	
+
 	*s = Schema(*sch)
 	return nil
 }
@@ -299,14 +301,14 @@ func (s *Schema) ValidateKeyword(ctx context.Context, currentState *ValidationSt
 		currentState.AddError(data, fmt.Sprintf("schema is always false"))
 		return
 	}
-	
+
 	s.Register("", currentState.LocalRegistry)
 	currentState.LocalRegistry.RegisterLocal(s)
-	
+
 	currentState.Local = s
-	
+
 	refKeyword := s.keywords["$ref"]
-	
+
 	if refKeyword == nil {
 		if currentState.BaseURI == "" {
 			currentState.BaseURI = s.docPath
@@ -320,17 +322,17 @@ func (s *Schema) ValidateKeyword(ctx context.Context, currentState *ValidationSt
 			}
 		}
 	}
-	
+
 	if currentState.BaseURI != "" && strings.HasSuffix(currentState.BaseURI, "#") {
 		currentState.BaseURI = strings.TrimRight(currentState.BaseURI, "#")
 	}
-	
+
 	// TODO(arqu): only on versions bellow draft2019_09
 	// if refKeyword != nil {
 	// 	refKeyword.ValidateKeyword(currentState, errs)
 	// 	return
 	// }
-	
+
 	s.validateSchemakeywords(ctx, currentState, data)
 }
 
@@ -354,6 +356,23 @@ func (s *Schema) ValidateBytes(ctx context.Context, data []byte) ([]KeyError, er
 	return *vs.Errs, nil
 }
 
+// ValidateBytesToDst performs schema validation against a slice of json
+// byte data
+func (s *Schema) ValidateBytesToDst(ctx context.Context, data []byte, dst interface{}) ([]KeyError, error) {
+	if reflect.ValueOf(dst).Kind() != reflect.Ptr {
+		return nil, errors.New("dst is not pointer type")
+	}
+	var doc interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("error parsing JSON bytes: %w", err)
+	}
+	vs := s.Validate(ctx, doc)
+	if len(*vs.Errs) == 0 {
+		dst = doc
+	}
+	return *vs.Errs, nil
+}
+
 // TopLevelType returns a string representing the schema's top-level type.
 func (s *Schema) TopLevelType() string {
 	if t, ok := s.keywords["type"].(*Type); ok {
@@ -371,7 +390,7 @@ func (s Schema) MarshalJSON() ([]byte, error) {
 		return []byte("true"), nil
 	default:
 		obj := map[string]interface{}{}
-		
+
 		for k, v := range s.keywords {
 			obj[k] = v
 		}

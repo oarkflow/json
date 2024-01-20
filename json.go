@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	
+
 	"github.com/oarkflow/json/jsonschema"
 )
 
@@ -47,12 +47,9 @@ func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
 	if err := json.Unmarshal(schemeBytes, &rs); err != nil {
 		return err
 	}
-	errs, err := rs.ValidateBytes(ctx, data)
-	if err != nil {
-		return err
-	}
+	errs, err := rs.ValidateBytesToDst(ctx, data, dst)
 	if len(errs) > 0 {
 		return errs[0]
 	}
-	return unmarshaler(data, dst)
+	return err
 }

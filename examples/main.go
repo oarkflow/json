@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	
+
 	"github.com/oarkflow/json"
 )
 
 var data = []byte(`
 {
     "em": {
+		"code": "001",
         "encounter_uid": 1,
         "work_item_uid": 2,
         "billing_provider": "Test provider",
