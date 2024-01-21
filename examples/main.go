@@ -91,6 +91,8 @@ var schema = []byte(`{
 				"properties": {
 					"rid": {
 						"type": "string|null",
+						"properties": null,
+						"items": null,
 						"in": "param"
 					}
 				},

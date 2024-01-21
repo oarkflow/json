@@ -172,7 +172,9 @@ func NewProp(i interface{}, path string) (Validator, error) {
 		val := v.val
 		var vad Validator
 		var err error
-
+		if val == nil {
+			continue
+		}
 		if key == "items" {
 			vad, err = funcs[key](val, path+"[*]", arr)
 		} else {
