@@ -1,404 +1,193 @@
 package jsonschema
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
-	"sort"
 	"strings"
-
-	jptr "github.com/oarkflow/json/jsonpointer"
-	"github.com/oarkflow/json/marshaler"
-	"github.com/oarkflow/json/unmarshaler"
+	"sync"
 )
 
-// Must turns a JSON string into a *Schema, panicing if parsing fails.
-// Useful for declaring Schemas in Go code.
-func Must(jsonString string) *Schema {
-	s := &Schema{}
-	if err := s.UnmarshalJSON([]byte(jsonString)); err != nil {
-		panic(err)
-	}
-	return s
-}
-
-type schemaType int
-
-const (
-	schemaTypeObject schemaType = iota
-	schemaTypeFalse
-	schemaTypeTrue
-)
-
-// Schema is the top-level structure defining a json schema
 type Schema struct {
-	schemaType    schemaType
-	docPath       string
-	hasRegistered bool
-
-	id string
-
-	extraDefinitions map[string]json.RawMessage
-	keywords         map[string]Keyword
-	orderedkeywords  []string
-
-	// topSchemaRegistry will be shared with all children schemas (on unmarshelling)
-	topSchemaRegistry *SchemaRegistry
+	prop Validator // root validator
+	i    interface{}
 }
 
-// NewSchema allocates a new Schema Keyword/Validator
-func NewSchema() Keyword {
-	return &Schema{}
-}
-
-func (s *Schema) SetSchemaRegistry(r *SchemaRegistry) {
-	s.topSchemaRegistry = r
-}
-
-func (s *Schema) GetSchemaRegistry() *SchemaRegistry {
-	if s.topSchemaRegistry == nil {
-		if UseScopedRegistries {
-			s.topSchemaRegistry = GetSchemaRegistry().Copy()
-		} else {
-			s.topSchemaRegistry = GetSchemaRegistry()
-		}
-	}
-	return s.topSchemaRegistry
-}
-
-// HasKeyword is a utility function for checking if the given schema
-// has an instance of the required keyword
-func (s *Schema) HasKeyword(key string) bool {
-	_, ok := s.keywords[key]
-	return ok
-}
-
-// Register implements the Keyword interface for Schema
-func (s *Schema) Register(uri string, registry *SchemaRegistry) {
-	schemaDebug("[Schema] Register")
-	if s.hasRegistered {
-		return
-	}
-	s.hasRegistered = true
-	registry.RegisterLocal(s)
-
-	// load default keyset if no other is present
-	globalRegistry, release := getGlobalKeywordRegistry()
-	globalRegistry.DefaultIfEmpty()
-	release()
-
-	address := s.id
-	if uri != "" && address != "" {
-		address, _ = SafeResolveURL(uri, address)
-	}
-	if s.docPath == "" && address != "" && address[0] != '#' {
-		docURI := ""
-		if u, err := url.Parse(address); err != nil {
-			docURI, _ = SafeResolveURL("https://qri.io", address)
-		} else {
-			docURI = u.String()
-		}
-		s.docPath = docURI
-		s.GetSchemaRegistry().Register(s)
-		uri = docURI
-	}
-
-	for _, keyword := range s.keywords {
-		keyword.Register(uri, registry)
-	}
-}
-
-// Resolve implements the Keyword interface for Schema
-func (s *Schema) Resolve(pointer jptr.Pointer, uri string) *Schema {
-	if pointer.IsEmpty() {
-		if s.docPath != "" {
-			s.docPath, _ = SafeResolveURL(uri, s.docPath)
-		} else {
-			s.docPath = uri
-		}
-		return s
-	}
-
-	current := pointer.Head()
-
-	if s.id != "" {
-		if u, err := url.Parse(s.id); err == nil {
-			if u.IsAbs() {
-				uri = s.id
-			} else {
-				uri, _ = SafeResolveURL(uri, s.id)
-			}
-		}
-	}
-
-	keyword := s.keywords[*current]
-	var keywordSchema *Schema
-	if keyword != nil {
-		keywordSchema = keyword.Resolve(pointer.Tail(), uri)
-	}
-
-	if keywordSchema != nil {
-		return keywordSchema
-	}
-
-	found, err := pointer.Eval(s.extraDefinitions)
+func NewSchema(i map[string]interface{}) (*Schema, error) {
+	s := &Schema{}
+	s.i = i
+	p, err := NewProp(i, "$")
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	if found == nil {
-		return nil
-	}
+	s.prop = p
+	return s, nil
+}
 
-	if foundSchema, ok := found.(*Schema); ok {
-		return foundSchema
+func NewSchemaFromJSON(j []byte) (*Schema, error) {
+	var i map[string]interface{}
+	err := json.Unmarshal(j, &i)
+	if err != nil {
+		return nil, err
 	}
-
+	return NewSchema(i)
+}
+func (s *Schema) UnmarshalJSON(b []byte) error {
+	var i interface{}
+	if err := json.Unmarshal(b, &i); err != nil {
+		return err
+	}
+	s.i = i
+	p, err := NewProp(i, "$")
+	if err != nil {
+		return err
+	}
+	s.prop = p
 	return nil
 }
 
-// JSONProp implements the JSONPather for Schema
-func (s Schema) JSONProp(name string) interface{} {
-	if keyword, ok := s.keywords[name]; ok {
-		return keyword
+func (s *Schema) MarshalJSON() (b []byte, err error) {
+	data, err := json.Marshal(s.i)
+	if err != nil {
+		return nil, err
 	}
-	return s.extraDefinitions[name]
+	return data, nil
 }
 
-// JSONChildren implements the JSONContainer interface for Schema
-func (s Schema) JSONChildren() map[string]JSONPather {
-	ch := map[string]JSONPather{}
-
-	if s.keywords != nil {
-		for key, val := range s.keywords {
-			if jp, ok := val.(JSONPather); ok {
-				ch[key] = jp
-			}
-		}
+var (
+	vctPool = &sync.Pool{
+		New: func() any {
+			return new(ValidateCtx)
+		},
 	}
+)
 
-	return ch
-}
+func (s *Schema) ValidateObject(i interface{}) error {
+	c := vctPool.Get().(*ValidateCtx)
+	c.root = s.prop
+	c.errors = c.errors[:0]
+	defer vctPool.Put(c)
 
-// _schema is an internal struct for encoding & decoding purposes
-type _schema struct {
-	ID string `json:"$id,omitempty"`
-}
-
-// UnmarshalJSON implements the json.Unmarshaler interface for Schema
-func (s *Schema) UnmarshalJSON(data []byte) error {
-	// ensure top schema registry has been initialized for root schema
-	if s.topSchemaRegistry == nil {
-		s.GetSchemaRegistry()
-	}
-
-	var b bool
-	if err := unmarshaler.Instance()(data, &b); err == nil {
-		if b {
-			// boolean true Always passes validation, as if the empty schema {}
-			*s = Schema{schemaType: schemaTypeTrue, topSchemaRegistry: s.topSchemaRegistry}
-			return nil
-		}
-		// boolean false Always fails validation, as if the schema { "not":{} }
-		*s = Schema{schemaType: schemaTypeFalse, topSchemaRegistry: s.topSchemaRegistry}
+	s.prop.Validate(c, i)
+	if len(c.errors) == 0 {
 		return nil
 	}
-
-	keywordRegistry := copyGlobalKeywordRegistry()
-	keywordRegistry.DefaultIfEmpty()
-
-	_s := _schema{}
-	if err := unmarshaler.Instance()(data, &_s); err != nil {
-		return err
-	}
-
-	sch := &Schema{
-		id:                _s.ID,
-		keywords:          map[string]Keyword{},
-		topSchemaRegistry: s.topSchemaRegistry,
-	}
-
-	valprops := map[string]json.RawMessage{}
-	if err := unmarshaler.Instance()(data, &valprops); err != nil {
-		return err
-	}
-
-	for prop, rawmsg := range valprops {
-		var keyword Keyword
-		if keywordRegistry.IsRegisteredKeyword(prop) {
-			keyword = keywordRegistry.GetKeyword(prop)
-		} else if keywordRegistry.IsNotSupportedKeyword(prop) {
-			schemaDebug(fmt.Sprintf("[Schema] WARN: '%s' is not supported and will be ignored\n", prop))
-			continue
-		} else {
-			if sch.extraDefinitions == nil {
-				sch.extraDefinitions = map[string]json.RawMessage{}
-			}
-			sch.extraDefinitions[prop] = rawmsg
-			continue
-		}
-		if _, ok := keyword.(*Void); !ok {
-			if err := unmarshaler.Instance()(rawmsg, keyword); err != nil {
-				return fmt.Errorf("error unmarshaling %s from json: %s", prop, err.Error())
-			}
-		}
-		sch.keywords[prop] = keyword
-	}
-
-	// ensures proper and stable keyword validation order
-	keyOrders := make([]_keyOrder, len(sch.keywords))
-	i := 0
-	for k := range sch.keywords {
-		keyOrders[i] = _keyOrder{
-			Key:   k,
-			Order: keywordRegistry.GetKeywordOrder(k),
-		}
-		i++
-	}
-	sort.SliceStable(keyOrders, func(i, j int) bool {
-		if keyOrders[i].Order == keyOrders[j].Order {
-			return keywordRegistry.GetKeywordInsertOrder(keyOrders[i].Key) < keywordRegistry.GetKeywordInsertOrder(keyOrders[j].Key)
-		}
-		return keyOrders[i].Order < keyOrders[j].Order
-	})
-	orderedKeys := make([]string, len(sch.keywords))
-	i = 0
-	for _, keyOrder := range keyOrders {
-		orderedKeys[i] = keyOrder.Key
-		i++
-	}
-	sch.orderedkeywords = orderedKeys
-
-	*s = Schema(*sch)
-	return nil
+	return errors.New(errsToString(c.errors))
 }
 
-// _keyOrder is an internal struct assigning evaluation order of keywords
-type _keyOrder struct {
-	Key   string
-	Order int
-}
-
-// Validate initiates a fresh validation state and triggers the evaluation
-func (s *Schema) Validate(ctx context.Context, data interface{}) *ValidationState {
-	currentState := NewValidationState(s)
-	s.ValidateKeyword(ctx, currentState, data)
-	return currentState
-}
-
-// ValidateKeyword uses the schema to check an instance, collecting validation
-// errors in a slice
-func (s *Schema) ValidateKeyword(ctx context.Context, currentState *ValidationState, data interface{}) {
-	schemaDebug("[Schema] Validating")
-	if s == nil {
-		currentState.AddError(data, fmt.Sprintf("schema is nil"))
-		return
-	}
-	if s.schemaType == schemaTypeTrue {
-		return
-	}
-	if s.schemaType == schemaTypeFalse {
-		currentState.AddError(data, fmt.Sprintf("schema is always false"))
-		return
-	}
-
-	s.Register("", currentState.LocalRegistry)
-	currentState.LocalRegistry.RegisterLocal(s)
-
-	currentState.Local = s
-
-	refKeyword := s.keywords["$ref"]
-
-	if refKeyword == nil {
-		if currentState.BaseURI == "" {
-			currentState.BaseURI = s.docPath
-		} else if s.docPath != "" {
-			if u, err := url.Parse(s.docPath); err == nil {
-				if u.IsAbs() {
-					currentState.BaseURI = s.docPath
-				} else {
-					currentState.BaseURI, _ = SafeResolveURL(currentState.BaseURI, s.docPath)
-				}
-			}
-		}
-	}
-
-	if currentState.BaseURI != "" && strings.HasSuffix(currentState.BaseURI, "#") {
-		currentState.BaseURI = strings.TrimRight(currentState.BaseURI, "#")
-	}
-
-	// TODO(arqu): only on versions bellow draft2019_09
-	// if refKeyword != nil {
-	// 	refKeyword.ValidateKeyword(currentState, errs)
-	// 	return
+func (s *Schema) Validate(i interface{}) error {
+	// c := ValidateCtx{
+	// 	root: s.prop,
 	// }
-
-	s.validateSchemakeywords(ctx, currentState, data)
+	c := vctPool.Get().(*ValidateCtx)
+	c.root = s.prop
+	c.errors = c.errors[:0]
+	defer vctPool.Put(c)
+	ii, err := scaleObject(i)
+	if err != nil {
+		return err
+	}
+	s.prop.Validate(c, ii)
+	if len(c.errors) == 0 {
+		return nil
+	}
+	return errors.New(errsToString(c.errors))
 }
 
-// validateSchemakeywords triggers validation of sub schemas and keywords
-func (s *Schema) validateSchemakeywords(ctx context.Context, currentState *ValidationState, data interface{}) {
-	if s.keywords != nil {
-		for _, keyword := range s.orderedkeywords {
-			s.keywords[keyword].ValidateKeyword(ctx, currentState, data)
+func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template interface{}) (err error) {
+	var i interface{}
+	err = json.Unmarshal(data, &i)
+	if err != nil {
+		return err
+	}
+	err = s.Validate(i)
+	if err != nil {
+		return err
+	}
+	return UnmarshalFromMap(i, template)
+}
+
+func scaleObject(i interface{}) (o interface{}, err error) {
+	switch d := i.(type) {
+	case []byte:
+		err = json.Unmarshal(d, &o)
+		if err != nil {
+			return o, err
 		}
-	}
-}
-
-// ValidateBytes performs schema validation against a slice of json
-// byte data
-func (s *Schema) ValidateBytes(ctx context.Context, data []byte) ([]KeyError, error) {
-	var doc interface{}
-	if err := unmarshaler.Instance()(data, &doc); err != nil {
-		return nil, fmt.Errorf("error parsing JSON bytes: %w", err)
-	}
-	vs := s.Validate(ctx, doc)
-	return *vs.Errs, nil
-}
-
-// ValidateBytesToDst performs schema validation against a slice of json
-// byte data
-func (s *Schema) ValidateBytesToDst(ctx context.Context, data []byte, dst interface{}) ([]KeyError, error) {
-	if reflect.ValueOf(dst).Kind() != reflect.Ptr {
-		return nil, errors.New("dst is not pointer type")
-	}
-	var doc interface{}
-	if err := unmarshaler.Instance()(data, &doc); err != nil {
-		return nil, fmt.Errorf("error parsing JSON bytes: %w", err)
-	}
-	vs := s.Validate(ctx, doc)
-	if len(*vs.Errs) == 0 {
-		dst = doc
-	}
-	return *vs.Errs, nil
-}
-
-// TopLevelType returns a string representing the schema's top-level type.
-func (s *Schema) TopLevelType() string {
-	if t, ok := s.keywords["type"].(*Type); ok {
-		return t.String()
-	}
-	return "unknown"
-}
-
-// MarshalJSON implements the json.Marshaler interface for Schema
-func (s Schema) MarshalJSON() ([]byte, error) {
-	switch s.schemaType {
-	case schemaTypeFalse:
-		return []byte("false"), nil
-	case schemaTypeTrue:
-		return []byte("true"), nil
+		return o, nil
+	case string:
+		err = json.Unmarshal([]byte(d), &o)
+		if err != nil {
+			return o, err
+		}
+		return o, nil
 	default:
-		obj := map[string]interface{}{}
-
-		for k, v := range s.keywords {
-			obj[k] = v
-		}
-		for k, v := range s.extraDefinitions {
-			obj[k] = v
-		}
-		return marshaler.Instance()(obj)
+		return i, nil
 	}
+}
+
+func (s *Schema) ValidateError(i interface{}) []Error {
+	c := &ValidateCtx{}
+	s.prop.Validate(c, i)
+	return c.errors
+}
+
+func (s *Schema) Bytes() []byte {
+	bs, _ := json.Marshal(s.i)
+	return bs
+}
+
+func (s *Schema) FormatBytes() []byte {
+	bf := bytes.NewBuffer(nil)
+	bs := s.Bytes()
+	err := json.Indent(bf, bs, "", "   ")
+	if err != nil {
+		return bs
+	}
+	return bf.Bytes()
+}
+
+func errsToString(errs []Error) string {
+	sb := strings.Builder{}
+	n := 0
+	for _, err := range errs {
+		n += len(err.Path) + len(err.Info) + 5
+	}
+	sb.Grow(n)
+	for _, err := range errs {
+		sb.WriteString(appendString("'", err.Path, "' ", err.Info, "; "))
+	}
+	return sb.String()
+}
+
+var (
+	globalSchemas = map[reflect.Type]*Schema{}
+)
+
+// RegisterSchema  will generate schema by giving type and register it  to global map.
+// use Validate() to validate the giving value
+func RegisterSchema(typ interface{}) error {
+	sc, err := GenerateSchema(typ)
+	if err != nil {
+		return err
+	}
+	globalSchemas[reflect.TypeOf(typ)] = sc
+	return nil
+}
+
+func MustRegisterSchema(typ interface{}) {
+	if err := RegisterSchema(typ); err != nil {
+		panic("register schema error" + err.Error())
+	}
+}
+
+func Validate(i interface{}) error {
+	t := reflect.TypeOf(i)
+	sc := globalSchemas[t]
+	if sc == nil {
+		return fmt.Errorf("no schema found for:%v", t.String())
+	}
+	return sc.Validate(i)
 }

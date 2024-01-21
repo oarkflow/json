@@ -1,7 +1,6 @@
 package json
 
 import (
-	"context"
 	"errors"
 	"reflect"
 
@@ -23,37 +22,19 @@ func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
 		return unmarshaler.Instance()(data, dst)
 	}
 	schemeBytes := scheme[0]
-	ctx := context.Background()
 	var rs jsonschema.Schema
 	if err := unmarshaler.Instance()(schemeBytes, &rs); err != nil {
 		return err
 	}
-	errs, err := rs.ValidateBytesToDst(ctx, data, dst)
-	if len(errs) > 0 {
-		var et []error
-		for _, e := range errs {
-			et = append(et, e)
-		}
-		return errors.Join(et...)
-	}
-	return err
+	return rs.ValidateAndUnmarshalJSON(data, dst)
 }
 
 func Validate(data []byte, scheme []byte) error {
-	ctx := context.Background()
 	var rs jsonschema.Schema
 	if err := unmarshaler.Instance()(scheme, &rs); err != nil {
 		return err
 	}
-	errs, err := rs.ValidateBytes(ctx, data)
-	if len(errs) > 0 {
-		var et []error
-		for _, e := range errs {
-			et = append(et, e)
-		}
-		return errors.Join(et...)
-	}
-	return err
+	return rs.Validate(data)
 }
 
 func Get(jsonBytes []byte, path string) sjson.Result {

@@ -1,7 +1,7 @@
 package jsonschema
 
 import (
-	"context"
+	// "encoding/json"
 	"fmt"
 	"net"
 	"net/mail"
@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	
-	jptr "github.com/oarkflow/json/jsonpointer"
 )
 
 const (
@@ -20,7 +18,7 @@ const (
 	endingTilda           = `\~$`
 	schemePrefix          = `^[^\:]+\:`
 	uriTemplate           = `\{[^\{\}\\]*\}`
-	uuid                  = `^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$`
+	//phone                 =  `^1[0-9]+$`
 )
 
 var (
@@ -30,84 +28,38 @@ var (
 	endingTildaPattern     = regexp.MustCompile(endingTilda)
 	schemePrefixPattern    = regexp.MustCompile(schemePrefix)
 	uriTemplatePattern     = regexp.MustCompile(uriTemplate)
-	uuidPattern            = regexp.MustCompile(uuid)
-	
+	//phonePattern           = regexp.MustCompile(phone)
 	disallowedIdnChars = map[string]bool{"\u0020": true, "\u002D": true, "\u00A2": true, "\u00A3": true, "\u00A4": true, "\u00A5": true, "\u034F": true, "\u0640": true, "\u07FA": true, "\u180B": true, "\u180C": true, "\u180D": true, "\u200B": true, "\u2060": true, "\u2104": true, "\u2108": true, "\u2114": true, "\u2117": true, "\u2118": true, "\u211E": true, "\u211F": true, "\u2123": true, "\u2125": true, "\u2282": true, "\u2283": true, "\u2284": true, "\u2285": true, "\u2286": true, "\u2287": true, "\u2288": true, "\u2616": true, "\u2617": true, "\u2619": true, "\u262F": true, "\u2638": true, "\u266C": true, "\u266D": true, "\u266F": true, "\u2752": true, "\u2756": true, "\u2758": true, "\u275E": true, "\u2761": true, "\u2775": true, "\u2794": true, "\u2798": true, "\u27AF": true, "\u27B1": true, "\u27BE": true, "\u3004": true, "\u3012": true, "\u3013": true, "\u3020": true, "\u302E": true, "\u302F": true, "\u3031": true, "\u3032": true, "\u3035": true, "\u303B": true, "\u3164": true, "\uFFA0": true}
 )
 
-// Format defines the format JSON Schema keyword
-type Format string
+// for json pointers
 
-// NewFormat allocates a new Format keyword
-func NewFormat() Keyword {
-	return new(Format)
-}
+// func FormatType(data interface{}) string {
+// 	switch
+// }
+// Note: Date and time Format names are derived from RFC 3339, section
+// 5.6  [RFC3339].
+// http://json-schema.org/latest/json-schema-validation.html#RFC3339
 
-// Register implements the Keyword interface for Format
-func (f *Format) Register(uri string, registry *SchemaRegistry) {}
+// Format implements semantic validation from section 7 of jsonschema draft 7
+// The "format" keyword functions as both an annotation (Section 3.3) and as an assertion (Section 3.2).
+// While no special effort is required to implement it as an annotation conveying semantic meaning,
+// implementing validation is non-trivial.
+// Implementations MAY support the "format" keyword as a validation assertion. Should they choose to do so:
+//    they SHOULD implement validation for attributes defined below;
+//    they SHOULD offer an option to disable validation for this keyword.
+// Implementations MAY add custom format attributes. S
+// ave for agreement between parties, schema authors SHALL NOT expect a peer implementation to support
+// this keyword and/or custom format attributes.
 
-// Resolve implements the Keyword interface for Format
-func (f *Format) Resolve(pointer jptr.Pointer, uri string) *Schema {
-	return nil
-}
-
-// ValidateKeyword implements the Keyword interface for Format
-func (f Format) ValidateKeyword(ctx context.Context, currentState *ValidationState, data interface{}) {
-	schemaDebug("[Format] Validating")
-	var err error
-	if str, ok := data.(string); ok {
-		switch f {
-		case "date-time":
-			err = isValidDateTime(str)
-		case "date":
-			err = isValidDate(str)
-		case "email":
-			err = isValidEmail(str)
-		case "hostname":
-			err = isValidHostname(str)
-		case "idn-email":
-			err = isValidIDNEmail(str)
-		case "idn-hostname":
-			err = isValidIDNHostname(str)
-		case "ipv4":
-			err = isValidIPv4(str)
-		case "ipv6":
-			err = isValidIPv6(str)
-		case "iri-reference":
-			err = isValidIriRef(str)
-		case "iri":
-			err = isValidIri(str)
-		case "json-pointer":
-			err = isValidJSONPointer(str)
-		case "regex":
-			err = isValidRegex(str)
-		case "relative-json-pointer":
-			err = isValidRelJSONPointer(str)
-		case "time":
-			err = isValidTime(str)
-		case "uri-reference":
-			err = isValidURIRef(str)
-		case "uri-template":
-			err = isValidURITemplate(str)
-		case "uri":
-			err = isValidURI(str)
-		case "uuid":
-			err = isValidUUID(str)
-		default:
-			err = nil
-		}
-		if err != nil {
-			currentState.AddError(data, fmt.Sprintf("invalid %s: %s", f, err.Error()))
-		}
-	}
-}
+// Validate validates input against a keyword
 
 // A string instance is valid against "date-time" if it is a valid
 // representation according to the "date-time" production derived
 // from RFC 3339, section 5.6 [RFC3339]
 // https://tools.ietf.org/html/rfc3339#section-5.6
 func isValidDateTime(dateTime string) error {
-	if _, err := time.Parse(time.RFC3339, strings.ToUpper(dateTime)); err != nil {
+	if _, err := time.Parse(time.RFC3339, dateTime); err != nil {
 		return fmt.Errorf("date-time incorrectly Formatted: %s", err.Error())
 	}
 	return nil
@@ -284,6 +236,7 @@ func isValidTime(time string) error {
 	arbitraryDate := "1963-06-19"
 	dateTime := fmt.Sprintf("%sT%s", arbitraryDate, time)
 	return isValidDateTime(dateTime)
+	return nil
 }
 
 // A string instance is a valid against "uri-reference" if it is a
@@ -327,13 +280,10 @@ func isValidURI(uri string) error {
 	return nil
 }
 
-// A string instance is valid against "uuid" if it is a valid
-// representation as defined by RFC 4122, section 3 [RFC4122].
-// Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-// https://tools.ietf.org/html/rfc4122#section-3
-func isValidUUID(uuid string) error {
-	if !uuidPattern.MatchString(uuid) {
-		return fmt.Errorf("invalid uuid string")
+func isValidPhone(phone string) error {
+	if len(phone) != 11 || phone[0] != '1' {
+		return fmt.Errorf("value bust be valid phone:%s", phone)
 	}
+
 	return nil
 }
