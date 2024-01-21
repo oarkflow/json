@@ -17,6 +17,7 @@ const (
 	typeArray
 	typeBool
 	typeObject
+	typeNull
 )
 
 var types = map[string]_type{
@@ -27,6 +28,7 @@ var types = map[string]_type{
 	"object":  typeObject,
 	"boolean": typeBool,
 	"array":   typeArray,
+	"null":    typeNull,
 }
 
 type typeValidateFunc func(path string, c *ValidateCtx, value interface{})
@@ -133,6 +135,22 @@ var typeFuncs = [...]typeValidateFunc{
 		})
 
 	},
+	typeNull: func(path string, c *ValidateCtx, value interface{}) {
+		switch value.(type) {
+		case nil:
+			return
+		}
+		switch reflect.TypeOf(value).Kind() {
+		case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
+			if reflect.ValueOf(value).IsNil() {
+				return
+			}
+		}
+		c.AddError(Error{
+			Path: path,
+			Info: "Invalid type, expected: null , given: " + reflect.TypeOf(value).String(),
+		})
+	},
 }
 
 func isKind(t reflect.Type, wants ...reflect.Kind) bool {
@@ -173,7 +191,7 @@ func NewType(i interface{}, path string, parent Validator) (Validator, error) {
 
 	t, ok := types[iv]
 	if !ok {
-		return nil, fmt.Errorf("invalie type:%s,path:%s", iv, path)
+		return nil, fmt.Errorf("invalid type:%s,path:%s", iv, path)
 	}
 
 	return &Type{

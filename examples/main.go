@@ -90,7 +90,7 @@ var schema = []byte(`{
 				"description": "Join a room",
 				"properties": {
 					"rid": {
-						"type": "string",
+						"type": "string|null",
 						"in": "param"
 					}
 				},
