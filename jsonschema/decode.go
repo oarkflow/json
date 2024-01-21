@@ -8,7 +8,6 @@ import (
 	"unsafe"
 )
 
-// UnmarshalFromMap 将map 中的值序列化到 struct 中
 func UnmarshalFromMap(in interface{}, template interface{}) error {
 	v := reflect.ValueOf(template)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
@@ -42,13 +41,11 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 	if in == nil {
 		return nil
 	}
-	// 是非导出的变量
 	if v.Kind() != reflect.Ptr && !v.CanSet() {
 		return nil
 	}
 
 	switch {
-	// 目标是字节数组
 	case bytesType == v.Type():
 		switch inv := in.(type) {
 		case []byte:
@@ -191,7 +188,6 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 			if elemV == nil {
 				continue
 			}
-			// 是包进
 
 			err := unmarshalObject2Struct(name, elemV, v.Field(i))
 			if err != nil {
@@ -236,7 +232,6 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 		return nil
 	case reflect.Array:
 		arr, ok := in.([]interface{})
-		//t := v.Type()
 		if !ok {
 			return fmt.Errorf("type of %s should be slice", path)
 		}

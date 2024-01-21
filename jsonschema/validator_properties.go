@@ -7,7 +7,6 @@ func init() {
 	RegisterValidator("maxProperties", NewMaxProperties)
 	RegisterValidator("oneOf", NewOneOf)
 	AddIgnoreKeys("description")
-	//AddIgnoreKeys("additionalProperties")
 	AddIgnoreKeys("$schema")
 	AddIgnoreKeys("$comment")
 	AddIgnoreKeys("examples")
@@ -101,7 +100,6 @@ func (a OneOf) Validate(c *ValidateCtx, value interface{}) {
 		}
 		allErrs = append(allErrs, cb.errors...)
 	}
-	// todo 区分errors
 
 	c.AddErrors(allErrs...)
 }

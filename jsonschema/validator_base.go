@@ -57,9 +57,7 @@ var typeFuncs = [...]typeValidateFunc{
 			if isKind(ty, reflect.Struct, reflect.Map) {
 				return
 			}
-			//if ty.Kind() == reflect.Ptr || ty.Kind() == reflect.Struct || ty.Kind() == reflect.Map {
-			//	return
-			//}
+
 		}
 
 		c.AddError(Error{
@@ -74,12 +72,7 @@ var typeFuncs = [...]typeValidateFunc{
 				reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint) {
 				return
 			}
-			//switch rt.Kind() {
-			//case reflect.Int, reflect.Int16, reflect.Int8, reflect.Int32, reflect.Int64, reflect.Uint8,
-			//reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
-			//	return
-			//default:
-			//}
+
 			c.AddError(Error{
 				Path: path,
 				Info: "Invalid type, expected: integer , given: " + reflect.TypeOf(value).String(),
@@ -102,11 +95,7 @@ var typeFuncs = [...]typeValidateFunc{
 				reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint, reflect.Float32, reflect.Float64) {
 				return
 			}
-			//switch rt.Kind() {
-			//case reflect.Int, reflect.Int16, reflect.Int8, reflect.Int32, reflect.Int64,
-			//reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint, reflect.Float32, reflect.Float64:
-			//	return
-			//}
+
 			c.AddError(Error{
 				Path: path,
 				Info: "Invalid type, expected: number , given: " + reflect.TypeOf(value).String(),
@@ -166,7 +155,6 @@ type Type struct {
 
 func (t *Type) Validate(c *ValidateCtx, value interface{}) {
 
-	//t.ValidateFunc(t.Path,c,value)
 	if value == nil {
 		return
 	}
@@ -227,7 +215,7 @@ func NewTypes(i interface{}, path string, parent Validator) (Validator, error) {
 		Type: str,
 	}
 	for _, s := range arr {
-		//fmt.Println(s)
+
 		ts, err := NewType(s, path, parent)
 		if err != nil {
 			return nil, fmt.Errorf("parse type items error!%w", err)
@@ -486,7 +474,7 @@ type Required struct {
 func (r *Required) Validate(c *ValidateCtx, value interface{}) {
 	m, ok := value.(map[string]interface{})
 	if !ok {
-		//r.validateStruct(c, reflect.ValueOf(value))
+
 		return
 	}
 	for _, key := range r.Val {
@@ -508,11 +496,7 @@ func (r *Required) validateStruct(c *ValidateCtx, v reflect.Value) {
 		r.validateStruct(c, v.Elem())
 		return
 	case reflect.Struct:
-		//requiedMap := map[string]bool{}
-		//
-		//for _, required := range r.Val {
-		//	requiedMap[required] = true
-		//}
+
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
 			fv := v.Field(i)
@@ -594,7 +578,7 @@ func (item *Items) validateStruct(c *ValidateCtx, val interface{}) {
 	v := reflect.ValueOf(val)
 	switch v.Kind() {
 	case reflect.Slice:
-		//t := v.Type()
+
 		for i := 0; i < v.Len(); i++ {
 			vi := v.Index(i)
 			if vi.CanInterface() {
@@ -676,7 +660,6 @@ func NewMultipleOf(i interface{}, path string, parent Validator) (Validator, err
 	return &MultipleOf{Val: m, Path: path}, nil
 }
 
-// base64 解码后的长度校验器。以base64解码后的长度为准
 type MaxB64DLength struct {
 	Val  int
 	Path string

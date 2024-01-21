@@ -11,7 +11,7 @@ import (
 )
 
 type Schema struct {
-	prop Validator // root validator
+	prop Validator
 	i    interface{}
 }
 
@@ -78,9 +78,7 @@ func (s *Schema) ValidateObject(i interface{}) error {
 }
 
 func (s *Schema) Validate(i interface{}) error {
-	// c := ValidateCtx{
-	// 	root: s.prop,
-	// }
+
 	c := vctPool.Get().(*ValidateCtx)
 	c.root = s.prop
 	c.errors = c.errors[:0]
@@ -166,8 +164,6 @@ var (
 	globalSchemas = map[reflect.Type]*Schema{}
 )
 
-// RegisterSchema  will generate schema by giving type and register it  to global map.
-// use Validate() to validate the giving value
 func RegisterSchema(typ interface{}) error {
 	sc, err := GenerateSchema(typ)
 	if err != nil {

@@ -98,7 +98,6 @@ func (c *JsonPathCompiled) Get(i interface{}) (interface{}, error) {
 	return vi, nil
 }
 
-// key1.busi
 func (c *JsonPathCompiled) Set(in interface{}, val interface{}) error {
 	vi := in
 	vip := in
@@ -162,7 +161,3 @@ func parseJpathCompiled(exp string) (*JsonPathCompiled, error) {
 	}
 	return &JsonPathCompiled{tokens: tokens}, nil
 }
-
-//func CompileJpath(exp string)(JPath,error){
-//
-//}

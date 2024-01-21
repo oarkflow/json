@@ -21,7 +21,6 @@ func (a AnyOf) Validate(c *ValidateCtx, value interface{}) {
 		}
 		allErrs = append(allErrs, cb.errors...)
 	}
-	// todo 区分errors
 
 	c.AddErrors(allErrs...)
 }
@@ -89,7 +88,6 @@ type Then struct {
 }
 
 func (t *Then) Validate(c *ValidateCtx, value interface{}) {
-	// then 不能主动调用
 }
 
 type Else struct {
@@ -97,7 +95,6 @@ type Else struct {
 }
 
 func (e *Else) Validate(c *ValidateCtx, value interface{}) {
-	//panic("implement me")
 }
 
 func NewThen(i interface{}, path string, parent Validator) (Validator, error) {
@@ -128,7 +125,6 @@ type Not struct {
 func (n Not) Validate(c *ValidateCtx, value interface{}) {
 	cn := c.Clone()
 	n.v.Validate(cn, value)
-	//fmt.Println(ners,value)
 	if len(cn.errors) == 0 {
 		c.AddErrors(Error{
 			Path: n.Path,
@@ -179,7 +175,6 @@ func (d *Dependencies) Validate(c *ValidateCtx, value interface{}) {
 	if !ok {
 		return
 	}
-	// 如果存在key，那么必须存在某些key
 	for key, vals := range d.Val {
 		_, ok := m[key]
 		if ok {
@@ -241,10 +236,6 @@ type KeyMatch struct {
 func (k *KeyMatch) Validate(c *ValidateCtx, value interface{}) {
 	m, ok := value.(map[string]interface{})
 	if !ok {
-		//c.AddError(Error{
-		//	Path: k.Path,
-		//	Info: "value is not object",
-		//})
 		return
 	}
 	for key, want := range k.Val {

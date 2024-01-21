@@ -69,45 +69,6 @@ func NewFormatVal(i interface{}, path string, parent Validator) (Validator, erro
 	return FormatVal(types[str]), nil
 }
 
-/*
-{
-	"setVal":{
-		"key1":1,
-		"key2":"val2",
-		"key3":"${key1}",
-		"key4":{
-			"func":"append",
-			"args":["${key1}","${key2}",{"func":"add","args":[1,2]}]
-		},
-	}
-}
-{
-	"if":{
-		"op":"eq",
-		"l":"",
-		"r":""
-	}
-	"then":{
-
-	},
-
-	"else":{
-
-	},
-	"and":[
-		{
-			"if":{}
-		}
-	],
-	"set":{
-		"k1":"",
-
-
-	}
-}
-
-*/
-
 type SetVal map[*JsonPathCompiled]Value
 
 func (s SetVal) Validate(c *ValidateCtx, value interface{}) {

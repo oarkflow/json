@@ -26,7 +26,6 @@ const (
 	_Required   = "required"
 )
 
-// generate jsonschema from giving template
 func GenerateSchema(i interface{}) (*Schema, error) {
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -255,7 +254,7 @@ func parseEnumNumber(sc map[string]interface{}, t reflect.Type, field *reflect.S
 			if err != nil {
 				return fmt.Errorf("parse int eumus tag error,tag value is not int:%s:%s", field.Name, enums)
 			}
-			eusi[i] = float64(num) // 主要是用做生成schema，做校验使用
+			eusi[i] = float64(num)
 		}
 		sc[_Enum] = eusi
 	}
@@ -272,7 +271,7 @@ func parseEnumInt(sc map[string]interface{}, t reflect.Type, field *reflect.Stru
 			if err != nil {
 				return fmt.Errorf("parse int eumus tag error,tag value is not int:%s:%s", field.Name, enums)
 			}
-			eusi[i] = num // 主要是用做生成schema，做校验使用
+			eusi[i] = num
 		}
 		sc[_Enum] = eusi
 	}

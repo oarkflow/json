@@ -10,9 +10,9 @@ import (
 )
 
 func init() {
-	// 这些显示放在funcs 里面时，不让编译通过，透。。。
+
 	RegisterValidator("properties", NewProperties(false))
-	//RegisterValidator("flexProperties", NewProperties(true))
+
 	RegisterValidator("items", NewItems)
 	RegisterValidator("anyOf", NewAnyOf)
 	RegisterValidator("if", NewIf)
@@ -44,7 +44,6 @@ func init() {
 
 }
 
-// 忽略的校验器
 var ignoreKeys = map[string]int{
 	"title":       1,
 	"comment":     1,
@@ -68,15 +67,13 @@ func AddIgnoreKeys(key string) {
 	ignoreKeys[key] = 1
 }
 func RegisterValidator(name string, fun NewValidatorFunc) {
-	//if funcs[name] != nil {
-	//	panicf("register validator error! %s already exists", name)
-	//}
+
 	funcs[name] = fun
 }
 
 var funcs = map[string]NewValidatorFunc{
 	"type": NewType,
-	//"types":      NewTypes,
+
 	"maxLength":  NewMaxLen,
 	"minLength":  NewMinLen,
 	"maximum":    NewMaximum,
@@ -162,14 +159,14 @@ func NewProp(i interface{}, path string) (Validator, error) {
 
 	sort.Slice(pwaps, func(i, j int) bool {
 		return pwaps[i].priority < pwaps[j].priority
-	}) // 对子序列排序，优先级低的先加载，优先级高的后加载
+	})
 
 	for _, v := range pwaps {
 		key := v.key
 		val := v.val
 		var vad Validator
 		var err error
-		// items 的path 不一样，
+
 		if key == "items" {
 			vad, err = funcs[key](val, path+"[*]", arr)
 		} else {
@@ -179,7 +176,7 @@ func NewProp(i interface{}, path string) (Validator, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create prop error:key=%s,err=%w", key, err)
 		}
-		//p[key] = vad
+
 		arr.Val = append(arr.Val, PropItem{Key: key, Val: vad})
 	}
 	return arr, nil
@@ -201,7 +198,7 @@ func (p *Properties) GetChild(path string) Validator {
 }
 
 func (p *Properties) GValidate(ctx *ValidateCtx, val *sjson.Result) {
-	//TODO implement me
+
 	if val.Type == sjson.Null {
 		return
 	}
@@ -244,16 +241,14 @@ func (p *Properties) Validate(c *ValidateCtx, value interface{}) {
 				if p.additionalProperties != nil {
 					cp := c.Clone()
 					p.additionalProperties.Validate(cp, v)
-					// for i, e := range cp.errors {
-					// 	cp.errors[i].Path = e.Path + "." + k
-					// }
+
 					c.AddErrors(cp.errors...)
 				}
 				continue
 			}
 			pv.Validate(c, v)
 		}
-		// 执行参数转换逻辑
+
 		for key, val := range p.constVals {
 			m[key] = val.Val
 		}
@@ -263,7 +258,7 @@ func (p *Properties) Validate(c *ValidateCtx, value interface{}) {
 				m[key] = val.Val
 				pv, _ := p.properties[key]
 				if pv != nil {
-					// 如果默认值是map 类型，需要复制下，否则会存在 并发读写的问题
+
 					pv.Validate(c.Clone(), copyValue(val.Val))
 				}
 			}
@@ -272,7 +267,7 @@ func (p *Properties) Validate(c *ValidateCtx, value interface{}) {
 		for key, rpk := range p.replaceKeys {
 			if mv, ok := m[key]; ok {
 				_, exist := m[string(rpk)]
-				if exist { // 如果要替换的key 已经存在，不替换
+				if exist {
 					continue
 				}
 				m[string(rpk)] = mv
@@ -295,7 +290,7 @@ func (p *Properties) Validate(c *ValidateCtx, value interface{}) {
 }
 
 func (p *Properties) validateStruct(c *ValidateCtx, rv reflect.Value) {
-	//fmt.Println("vadd:", rv.Type().String())
+
 	switch rv.Kind() {
 	case reflect.Ptr:
 		if rv.IsNil() {
@@ -312,19 +307,18 @@ func (p *Properties) validateStruct(c *ValidateCtx, rv reflect.Value) {
 			if propName == "" {
 				propName = ft.Name
 			}
-			//fmt.Println("valds",propName)
+
 			vad := p.properties[propName]
 			if vad == nil {
 				continue
 			}
 			fv := rv.Field(i)
-			//fmt.Println("fv.", fv.String(), fv.CanInterface(), vad)
+
 			if fv.CanInterface() {
-				//vad.Validate(propName, fv.Interface(), errs)
 
 				vad.Validate(c, fv.Interface())
 			}
-			// set constVal ,struct 类型无法知道目标值是否为空，无法设定默认值
+
 			var vv interface{} = nil
 			constv := p.constVals[propName]
 			if constv != nil {
@@ -365,16 +359,9 @@ func (p *Properties) validateStruct(c *ValidateCtx, rv reflect.Value) {
 					return
 				}
 				if p.additionalProperties != nil {
-					//ctx := c.Clone()
+
 					p.additionalProperties.Validate(c, val.Interface())
-					//if len(ctx.errors) > 0 {
-					//for _, e := range ctx.errors {
-					//	c.AddError(Error{
-					//		Path: e.Path,
-					//		Info: e.Info,
-					//	})
-					//}
-					//}
+
 				}
 
 			}
@@ -458,10 +445,7 @@ func (a AdditionalProperties) Validate(c *ValidateCtx, value interface{}) {
 }
 
 func NewAdditionalProperties(i interface{}, path string, parent Validator) (Validator, error) {
-	//bv, ok := i.(bool)
-	//if !ok {
-	//	return nil, fmt.Errorf("value of 'additionalProperties' must be boolean: %v", desc(i))
-	//}
+
 	switch i := i.(type) {
 	case bool:
 		return &AdditionalProperties{enableUnknownField: i}, nil
@@ -473,7 +457,6 @@ func NewAdditionalProperties(i interface{}, path string, parent Validator) (Vali
 		return &AdditionalProperties{enableUnknownField: true, validator: vad}, nil
 	}
 
-	//return nil, fmt.Errorf("value of 'additionalProperties' must be boolean or object: %v", desc(i))
 }
 
 type AdditionalProperties2 struct {
@@ -486,7 +469,7 @@ func (a *AdditionalProperties2) Validate(c *ValidateCtx, value interface{}) {
 
 type errorVal struct {
 	path string
-	//errorInfo string
+
 	errInfo Value
 }
 
@@ -500,10 +483,7 @@ func (e *errorVal) Validate(c *ValidateCtx, value interface{}) {
 }
 
 var newError NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
-	//str, ok := i.(string)
-	//if !ok{
-	//	return nil,fmt.Errorf("%s error shold be string",path)
-	//}
+
 	val, err := parseValue(i)
 	if err != nil {
 		return nil, err
@@ -578,9 +558,7 @@ children :{
 	}
 }
 */
-// uniqueItems  should define together with items which restrict the array item
-//to be comparable type .otherwise ,the validator may panic at runtime
-// if item is not comparable type
+
 type uniqueItems struct {
 	path   string
 	unique bool
@@ -697,7 +675,7 @@ func copyValue(v interface{}) interface{} {
 type exclusiveMaximum struct {
 	Path   string
 	Value  float64
-	status int //0: 需要被校验，1 不需要校验，由 maxinum 校验，2 maxmum 也不需要校验
+	status int
 }
 
 func (v *exclusiveMaximum) Validate(c *ValidateCtx, value interface{}) {
