@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/oarkflow/json"
+	"github.com/oarkflow/json/jsonschema"
 )
 
 var data = []byte(`
@@ -84,7 +85,28 @@ var schemeBytes = []byte(`{
 	}
 }`)
 
+var schema = []byte(`{
+				"type": "object",
+				"description": "Join a room",
+				"properties": {
+					"rid": {
+						"type": "string",
+						"in": "param"
+					}
+				},
+				"additionalProperties": false
+			}`)
+
 func main() {
+	var sch jsonschema.Schema
+	err := json.Unmarshal(schema, &sch)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(sch)
+}
+
+func unmarshal() {
 	var mp map[string]any
 	err := json.Unmarshal(data, &mp)
 	if err != nil {

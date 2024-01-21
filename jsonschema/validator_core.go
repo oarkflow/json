@@ -63,6 +63,12 @@ var priorities = map[string]int{
 	"minimum":    1,
 }
 
+var ignoreUnknownValidators = true
+
+func SetIgnoreUnknownValidators(v bool) {
+	ignoreUnknownValidators = v
+}
+
 func AddIgnoreKeys(key string) {
 	ignoreKeys[key] = 1
 }
@@ -144,7 +150,7 @@ func NewProp(i interface{}, path string) (Validator, error) {
 	for key, val := range m {
 
 		if funcs[key] == nil {
-			if ignoreKeys[key] > 0 {
+			if ignoreKeys[key] > 0 || ignoreUnknownValidators {
 				continue
 			}
 			return nil, fmt.Errorf("%s is unknown validator,path=%s", key, path)
