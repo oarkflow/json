@@ -1,6 +1,10 @@
 package jsonschema
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/oarkflow/pkg/evaluate"
+)
 
 type ConstVal struct {
 	Val interface{}
@@ -31,6 +35,12 @@ func NewConstVal(i interface{}, path string, parent Validator) (Validator, error
 }
 
 func NewDefaultVal(i interface{}, path string, parent Validator) (Validator, error) {
+	p, _ := evaluate.Parse(fmt.Sprintf("%v", i), true)
+	pr := evaluate.NewEvalParams(make(map[string]interface{}))
+	val, err := p.Eval(pr)
+	if err == nil {
+		return &DefaultVal{val}, nil
+	}
 	return &DefaultVal{i}, nil
 }
 

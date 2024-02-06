@@ -1,2 +1,4 @@
+github.com/oarkflow/pkg v0.1.1 h1:WtvnIaSolLaBJQKZlCRnNeRM11ywNPOu3wtazIBmpi0=
+github.com/oarkflow/pkg v0.1.1/go.mod h1:EdlZPVZm7JJ1KI9EbhLLInP51cUEdRXPmEpR5Wa7HyQ=
 github.com/tidwall/pretty v1.2.1 h1:qjsOFOWWQl+N3RsoF5/ssm1pHmJJwhjlSbZ51I6wMl4=
 github.com/tidwall/pretty v1.2.1/go.mod h1:ITEVvHYasfjBbM0u2Pg8T2nJnzm8xPwvNhhsoaGGjNU=

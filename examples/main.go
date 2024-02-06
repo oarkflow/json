@@ -9,81 +9,10 @@ import (
 
 var data = []byte(`
 {
-    "em": {
-        "encounter_uid": 1,
-        "work_item_uid": 2,
-        "billing_provider": "Test provider",
-        "resident_provider": "Test Resident Provider"
-    },
-    "cpt": [
-        {
-            "code": "001",
-            "billing_provider": "Test provider",
-            "resident_provider": "Test Resident Provider"
-        },
-        {
-            "code": "OBS01",
-            "billing_provider": "Test provider",
-            "resident_provider": "Test Resident Provider"
-        },
-        {
-            "code": "SU002",
-            "billing_provider": "Test provider",
-            "resident_provider": "Test Resident Provider"
-        }
-    ]
+	"email": "2021-01-01"
 }
 `)
-var schemeBytes = []byte(`{
-	"type": "object",
-	"properties": {
-		"em": {
-			"type": "object",
-			"properties": {
-				"code": {
-					"type": "string",
-					"default": "N/A"
-				},
-				"encounter_uid": {
-					"type": "integer"
-				},
-				"work_item_uid": {
-					"type": "integer"
-				},
-				"billing_provider": {
-					"type": "string"
-				},
-				"resident_provider": {
-					"type": "string"
-				}
-			},
-			"required": ["code"]
-		},
-		"cpt": {
-			"type" : "array",
-			"items" : {
-				"type": "object",
-				"properties": {
-					"code": {
-						"type": "string"
-					},
-					"encounter_uid": {
-						"type": "integer"
-					},
-					"work_item_uid": {
-						"type": "integer"
-					},
-					"billing_provider": {
-						"type": "string"
-					},
-					"resident_provider": {
-						"type": "string"
-					}
-				}
-			}
-		}
-	}
-}`)
+var schemeBytes = []byte(`{"type":"object","description":"users","properties":{"avatar":{"type":"string","maxLength":255},"created_at":{"type":"string","default":"now()"},"created_by":{"type":"integer","maxLength":64},"deleted_at":{"type":"string"},"email":{"type":"string","maxLength":255},"email_verified_at":{"type":"string"},"first_name":{"type":"string","maxLength":255},"is_active":{"type":"boolean","default":"false"},"last_name":{"type":"string","maxLength":255},"middle_name":{"type":"string","maxLength":255},"status":{"type":"string","maxLength":30},"title":{"type":"string","maxLength":10},"updated_at":{"type":"string","default":"now()"},"updated_by":{"type":"integer","maxLength":64},"user_id":{"type":"integer","maxLength":64},"verification_token":{"type":"string","maxLength":255}},"required":["email"],"primaryKeys":["user_id"]}`)
 
 var schema = []byte(`{
 				"type": "object",
@@ -99,7 +28,7 @@ var schema = []byte(`{
 				"additionalProperties": false
 			}`)
 
-func main() {
+func ma1in() {
 	var sch jsonschema.Schema
 	err := json.Unmarshal(schema, &sch)
 	if err != nil {
@@ -108,16 +37,16 @@ func main() {
 	fmt.Println(sch)
 }
 
-func unmarshal() {
-	var mp map[string]any
-	err := json.Unmarshal(data, &mp)
+func main() {
+	var sch jsonschema.Schema
+	err := json.Unmarshal(schemeBytes, &sch)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(mp)
-	err = json.Unmarshal(data, &mp, schemeBytes)
+	var d map[string]any
+	err = sch.ValidateAndUnmarshalJSON(data, &d)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(mp)
+	fmt.Println(d)
 }
