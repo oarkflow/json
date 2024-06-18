@@ -180,24 +180,40 @@ func (t *Type) Validate(c *ValidateCtx, value interface{}) {
 }
 
 func NewType(i interface{}, path string, parent Validator) (Validator, error) {
-	iv, ok := i.(string)
-	if !ok {
-		return nil, fmt.Errorf("value of 'type' must be string! v:%v,path:%s", desc(i), path)
-	}
-	ivs := strings.Split(iv, "|")
-	if len(ivs) > 1 {
-		return NewTypes(iv, path, parent)
-	}
+	var ivs []string
+	switch i := i.(type) {
+	case []any:
+		for _, t := range i {
+			switch t := t.(type) {
+			case string:
+				ivs = append(ivs, t)
+			}
+		}
+		it := strings.Join(ivs, "|")
+		return newTypes(it, ivs, path, parent)
+	case []string:
+		ivs = i
+		it := strings.Join(ivs, "|")
+		return newTypes(it, ivs, path, parent)
+	default:
+		iv, ok := i.(string)
+		if !ok {
+			return nil, fmt.Errorf("value of 'type' must be string! v:%v,path:%s", desc(i), path)
+		}
+		ivs = strings.Split(iv, "|")
+		if len(ivs) > 1 {
+			return newTypes(iv, ivs, path, parent)
+		}
+		t, ok := types[iv]
+		if !ok {
+			return nil, fmt.Errorf("invalid type:%s,path:%s", iv, path)
+		}
 
-	t, ok := types[iv]
-	if !ok {
-		return nil, fmt.Errorf("invalid type:%s,path:%s", iv, path)
+		return &Type{
+			ValidateFunc: typeFuncs[t],
+			Path:         path,
+		}, nil
 	}
-
-	return &Type{
-		ValidateFunc: typeFuncs[t],
-		Path:         path,
-	}, nil
 }
 
 type Types struct {
@@ -227,6 +243,10 @@ func NewTypes(i interface{}, path string, parent Validator) (Validator, error) {
 		return nil, fmt.Errorf("value of types must be string !like 'string|number'")
 	}
 	arr := strings.Split(str, "|")
+	return newTypes(str, arr, path, parent)
+}
+
+func newTypes(str string, arr []string, path string, parent Validator) (Validator, error) {
 	tys := &Types{
 		Vals: nil,
 		Path: path,
