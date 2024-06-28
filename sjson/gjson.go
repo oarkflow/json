@@ -8,8 +8,6 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
-
-	"github.com/tidwall/pretty"
 )
 
 // Type is Result type
@@ -2799,7 +2797,6 @@ var modifiers map[string]func(json, arg string) string
 
 func init() {
 	modifiers = map[string]func(json, arg string) string{
-		"pretty":  modPretty,
 		"ugly":    modUgly,
 		"reverse": modReverse,
 		"this":    modThis,
@@ -2848,28 +2845,6 @@ func cleanWS(s string) string {
 	return s
 }
 
-// @pretty modifier makes the json look nice.
-func modPretty(json, arg string) string {
-	if len(arg) > 0 {
-		opts := *pretty.DefaultOptions
-		Parse(arg).ForEach(func(key, value Result) bool {
-			switch key.String() {
-			case "sortKeys":
-				opts.SortKeys = value.Bool()
-			case "indent":
-				opts.Indent = cleanWS(value.String())
-			case "prefix":
-				opts.Prefix = cleanWS(value.String())
-			case "width":
-				opts.Width = int(value.Int())
-			}
-			return true
-		})
-		return bytesString(pretty.PrettyOptions(stringBytes(json), &opts))
-	}
-	return bytesString(pretty.Pretty(stringBytes(json)))
-}
-
 // @this returns the current element. Can be used to retrieve the root element.
 func modThis(json, arg string) string {
 	return json
@@ -2877,7 +2852,7 @@ func modThis(json, arg string) string {
 
 // @ugly modifier removes all whitespace.
 func modUgly(json, arg string) string {
-	return bytesString(pretty.Ugly(stringBytes(json)))
+	return json
 }
 
 // @reverse reverses array elements or root object members.
