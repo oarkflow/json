@@ -108,7 +108,7 @@ func (a *ArrProp) GetChild(path string) Validator {
 	return a.Get(path)
 }
 
-func (a *ArrProp) Validate(c *ValidateCtx, value interface{}) {
+func (a *ArrProp) Validate(c *ValidateCtx, value any) {
 	for _, item := range a.Val {
 		if item.Val == nil {
 			continue
@@ -128,14 +128,14 @@ func (a *ArrProp) Get(key string) Validator {
 
 type propWrap struct {
 	key      string
-	val      interface{}
+	val      any
 	priority int
 }
 
-func NewProp(i interface{}, path string) (Validator, error) {
-	m, ok := i.(map[string]interface{})
+func NewProp(i any, path string) (Validator, error) {
+	m, ok := i.(map[string]any)
 	if !ok {
-		if _, ok := i.([]interface{}); ok {
+		if _, ok := i.([]any); ok {
 			return NewAnyOf(i, path, nil)
 		}
 		return nil, fmt.Errorf("cannot create prop with not object type: %v,path:%s", desc(i), path)
@@ -230,12 +230,12 @@ func (p *Properties) GValidate(ctx *ValidateCtx, val *sjson.Result) {
 	})
 }
 
-func (p *Properties) Validate(c *ValidateCtx, value interface{}) {
+func (p *Properties) Validate(c *ValidateCtx, value any) {
 	if value == nil {
 		return
 	}
 
-	if m, ok := value.(map[string]interface{}); ok {
+	if m, ok := value.(map[string]any); ok {
 		for k, v := range m {
 			pv := p.properties[k]
 			if pv == nil {
@@ -327,7 +327,7 @@ func (p *Properties) validateStruct(c *ValidateCtx, rv reflect.Value) {
 				vad.Validate(c, fv.Interface())
 			}
 
-			var vv interface{} = nil
+			var vv any = nil
 			constv := p.constVals[propName]
 			if constv != nil {
 				vv = constv.Val
@@ -381,8 +381,8 @@ func (p *Properties) validateStruct(c *ValidateCtx, rv reflect.Value) {
 }
 
 func NewProperties(enableUnKnownFields bool) NewValidatorFunc {
-	return func(i interface{}, path string, parent Validator) (validator Validator, e error) {
-		m, ok := i.(map[string]interface{})
+	return func(i any, path string, parent Validator) (validator Validator, e error) {
+		m, ok := i.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("cannot create properties with not object type: %v,flex:%v,path:%s", i, enableUnKnownFields, path)
 		}
@@ -448,11 +448,11 @@ type AdditionalProperties struct {
 	validator          Validator
 }
 
-func (a AdditionalProperties) Validate(c *ValidateCtx, value interface{}) {
+func (a AdditionalProperties) Validate(c *ValidateCtx, value any) {
 
 }
 
-func NewAdditionalProperties(i interface{}, path string, parent Validator) (Validator, error) {
+func NewAdditionalProperties(i any, path string, parent Validator) (Validator, error) {
 
 	switch i := i.(type) {
 	case bool:
@@ -471,7 +471,7 @@ type AdditionalProperties2 struct {
 	Validators []Validator
 }
 
-func (a *AdditionalProperties2) Validate(c *ValidateCtx, value interface{}) {
+func (a *AdditionalProperties2) Validate(c *ValidateCtx, value any) {
 
 }
 
@@ -481,16 +481,16 @@ type errorVal struct {
 	errInfo Value
 }
 
-func (e *errorVal) Validate(c *ValidateCtx, value interface{}) {
+func (e *errorVal) Validate(c *ValidateCtx, value any) {
 	c.AddError(Error{
 		Path: e.path,
-		Info: StringOf(e.errInfo.Get(map[string]interface{}{
+		Info: StringOf(e.errInfo.Get(map[string]any{
 			"$": value,
 		})),
 	})
 }
 
-var newError NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newError NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 
 	val, err := parseValue(i)
 	if err != nil {
@@ -506,17 +506,17 @@ type deleteValidator struct {
 	deletes []string
 }
 
-func (d *deleteValidator) Validate(c *ValidateCtx, value interface{}) {
+func (d *deleteValidator) Validate(c *ValidateCtx, value any) {
 	switch m := value.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for _, key := range d.deletes {
 			delete(m, key)
 		}
 	}
 }
 
-var newDeleteValidator NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
-	arr, ok := i.([]interface{})
+var newDeleteValidator NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
+	arr, ok := i.([]any)
 	if !ok {
 		return nil, fmt.Errorf("new delete error, value should be array")
 	}
@@ -531,9 +531,9 @@ type childValidator struct {
 	children map[string]Validator
 }
 
-func (chd *childValidator) Validate(c *ValidateCtx, value interface{}) {
+func (chd *childValidator) Validate(c *ValidateCtx, value any) {
 	switch v := value.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for key, validator := range chd.children {
 			val, ok := v[key]
 			if ok {
@@ -543,8 +543,8 @@ func (chd *childValidator) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-var newChildrenValidator NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
-	m, ok := i.(map[string]interface{})
+var newChildrenValidator NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
+	m, ok := i.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("children validator value should be map,but now is:%s", reflect.TypeOf(i).String())
 	}
@@ -572,15 +572,15 @@ type uniqueItems struct {
 	unique bool
 }
 
-func (u *uniqueItems) Validate(c *ValidateCtx, value interface{}) {
+func (u *uniqueItems) Validate(c *ValidateCtx, value any) {
 	if !u.unique {
 		return
 	}
-	arr, ok := value.([]interface{})
+	arr, ok := value.([]any)
 	if !ok {
 		return
 	}
-	okMap := make(map[interface{}]bool, len(arr))
+	okMap := make(map[any]bool, len(arr))
 	for _, val := range arr {
 		if !isComparable(val) {
 			c.AddErrorInfo(u.path, " items should be comparable type,like [ string boolean number ]")
@@ -595,7 +595,7 @@ func (u *uniqueItems) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-var newUniqueItemValidator NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newUniqueItemValidator NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 	unique, ok := i.(bool)
 	if !ok {
 		return nil, fmt.Errorf("%s uniqueItems value should be boolean ", path)
@@ -603,7 +603,7 @@ var newUniqueItemValidator NewValidatorFunc = func(i interface{}, path string, p
 	return &uniqueItems{unique: unique, path: path}, nil
 }
 
-func isComparable(v interface{}) bool {
+func isComparable(v any) bool {
 	switch v.(type) {
 	case string, float64, bool:
 		return true
@@ -616,8 +616,8 @@ type maxItems struct {
 	path string
 }
 
-func (m *maxItems) Validate(c *ValidateCtx, value interface{}) {
-	arr, ok := value.([]interface{})
+func (m *maxItems) Validate(c *ValidateCtx, value any) {
+	arr, ok := value.([]any)
 	if !ok {
 		return
 	}
@@ -626,7 +626,7 @@ func (m *maxItems) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-var newMaxItems NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newMaxItems NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 	val, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("%s maxItems should be integer", path)
@@ -639,8 +639,8 @@ type minItems struct {
 	path string
 }
 
-func (m *minItems) Validate(c *ValidateCtx, value interface{}) {
-	arr, ok := value.([]interface{})
+func (m *minItems) Validate(c *ValidateCtx, value any) {
+	arr, ok := value.([]any)
 	if !ok {
 		return
 	}
@@ -649,7 +649,7 @@ func (m *minItems) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-var newMinItems NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newMinItems NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 	val, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("%s maxItems should be integer", path)
@@ -657,18 +657,18 @@ var newMinItems NewValidatorFunc = func(i interface{}, path string, parent Valid
 	return &minItems{path: path, val: int(val)}, nil
 }
 
-func copyValue(v interface{}) interface{} {
+func copyValue(v any) any {
 	switch vv := v.(type) {
 	case string, float64, bool:
 		return v
-	case map[string]interface{}:
-		dst := make(map[string]interface{}, len(vv))
+	case map[string]any:
+		dst := make(map[string]any, len(vv))
 		for key, val := range vv {
 			dst[key] = copyValue(val)
 		}
 		return dst
-	case []interface{}:
-		dst := make([]interface{}, len(vv))
+	case []any:
+		dst := make([]any, len(vv))
 		for i, val := range vv {
 			dst[i] = copyValue(val)
 		}
@@ -686,7 +686,7 @@ type exclusiveMaximum struct {
 	status int
 }
 
-func (v *exclusiveMaximum) Validate(c *ValidateCtx, value interface{}) {
+func (v *exclusiveMaximum) Validate(c *ValidateCtx, value any) {
 	if v.status != 0 {
 		return
 	}
@@ -698,7 +698,7 @@ func (v *exclusiveMaximum) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-var NewExclusiveMaximum NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var NewExclusiveMaximum NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 
 	switch f := i.(type) {
 	case float64:
@@ -719,7 +719,7 @@ type exclusiveMinimum struct {
 	status int
 }
 
-var NewExclusiveMinimum NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var NewExclusiveMinimum NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 
 	switch f := i.(type) {
 	case float64:
@@ -734,7 +734,7 @@ var NewExclusiveMinimum NewValidatorFunc = func(i interface{}, path string, pare
 	return nil, fmt.Errorf("exclusiveMinimum should be number or bool")
 }
 
-func (v *exclusiveMinimum) Validate(c *ValidateCtx, value interface{}) {
+func (v *exclusiveMinimum) Validate(c *ValidateCtx, value any) {
 	if v.status != 0 {
 		return
 	}

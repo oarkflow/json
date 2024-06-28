@@ -23,7 +23,7 @@ func init() {
 	SetFunc("delete", funcDelete)
 }
 
-func funcAppend(ctx Context, args ...Value) interface{} {
+func funcAppend(ctx Context, args ...Value) any {
 	bf := strings.Builder{}
 	for _, arg := range args {
 		v := arg.Get(ctx)
@@ -32,14 +32,14 @@ func funcAppend(ctx Context, args ...Value) interface{} {
 	return bf.String()
 }
 
-func funcAdd(ctx Context, args ...Value) interface{} {
+func funcAdd(ctx Context, args ...Value) any {
 	var sum float64 = 0
 	for _, arg := range args {
 		sum += NumberOf(arg.Get(ctx))
 	}
 	return sum
 }
-func funcMul(ctx Context, args ...Value) interface{} {
+func funcMul(ctx Context, args ...Value) any {
 	var sum float64 = 0
 	for _, arg := range args {
 		sum *= NumberOf(arg.Get(ctx))
@@ -47,7 +47,7 @@ func funcMul(ctx Context, args ...Value) interface{} {
 	return sum
 }
 
-func funcSub(ctx Context, args ...Value) interface{} {
+func funcSub(ctx Context, args ...Value) any {
 	if len(args) <= 2 {
 		return 0
 	}
@@ -55,7 +55,7 @@ func funcSub(ctx Context, args ...Value) interface{} {
 	return NumberOf(args[0].Get(ctx)) - NumberOf(args[1].Get(ctx))
 }
 
-func funcDiv(ctx Context, args ...Value) interface{} {
+func funcDiv(ctx Context, args ...Value) any {
 	if len(args) <= 2 {
 		return 0
 	}
@@ -63,7 +63,7 @@ func funcDiv(ctx Context, args ...Value) interface{} {
 	return NumberOf(args[0].Get(ctx)) / NumberOf(args[1].Get(ctx))
 }
 
-func funcMod(ctx Context, args ...Value) interface{} {
+func funcMod(ctx Context, args ...Value) any {
 	if len(args) <= 2 {
 		return 0
 	}
@@ -71,7 +71,7 @@ func funcMod(ctx Context, args ...Value) interface{} {
 	return int(NumberOf(args[0].Get(ctx))) % int(NumberOf(args[1].Get(ctx)))
 }
 
-func funcSplit(ctx Context, args ...Value) interface{} {
+func funcSplit(ctx Context, args ...Value) any {
 	if len(args) < 2 {
 		return nil
 	}
@@ -84,7 +84,7 @@ func funcSplit(ctx Context, args ...Value) interface{} {
 	return strings.SplitN(str, sep, num)
 }
 
-func funcJoin(ctx Context, args ...Value) interface{} {
+func funcJoin(ctx Context, args ...Value) any {
 	if len(args) < 2 {
 		return ""
 	}
@@ -93,7 +93,7 @@ func funcJoin(ctx Context, args ...Value) interface{} {
 	if ok {
 		return strings.Join(arri, sep)
 	}
-	arr, ok := args[0].Get(ctx).([]interface{})
+	arr, ok := args[0].Get(ctx).([]any)
 	if !ok {
 		return ""
 	}
@@ -104,7 +104,7 @@ func funcJoin(ctx Context, args ...Value) interface{} {
 	return strings.Join(arrs, sep)
 }
 
-func funcTrimPrefix(ctx Context, args ...Value) interface{} {
+func funcTrimPrefix(ctx Context, args ...Value) any {
 	if len(args) < 2 {
 		return ""
 	}
@@ -112,7 +112,7 @@ func funcTrimPrefix(ctx Context, args ...Value) interface{} {
 	return strings.TrimPrefix(StringOf(args[0].Get(ctx)), StringOf(args[1].Get(ctx)))
 }
 
-func funcTrimSuffix(ctx Context, args ...Value) interface{} {
+func funcTrimSuffix(ctx Context, args ...Value) any {
 	if len(args) < 2 {
 		return ""
 	}
@@ -120,7 +120,7 @@ func funcTrimSuffix(ctx Context, args ...Value) interface{} {
 	return strings.TrimSuffix(StringOf(args[0].Get(ctx)), StringOf(args[1].Get(ctx)))
 }
 
-func funcTrim(ctx Context, args ...Value) interface{} {
+func funcTrim(ctx Context, args ...Value) any {
 	if len(args) < 2 {
 		return ""
 	}
@@ -128,7 +128,7 @@ func funcTrim(ctx Context, args ...Value) interface{} {
 	return strings.Trim(StringOf(args[0].Get(ctx)), StringOf(args[1].Get(ctx)))
 }
 
-func funcReplace(ctx Context, args ...Value) interface{} {
+func funcReplace(ctx Context, args ...Value) any {
 	if len(args) < 3 {
 		return ""
 	}
@@ -136,11 +136,11 @@ func funcReplace(ctx Context, args ...Value) interface{} {
 	return strings.Replace(StringOf(args[0].Get(ctx)), StringOf(args[1].Get(ctx)), StringOf(args[2].Get(ctx)), -1)
 }
 
-func funcSprintf(ctx Context, args ...Value) interface{} {
+func funcSprintf(ctx Context, args ...Value) any {
 	if len(args) < 1 {
 		return nil
 	}
-	ags := make([]interface{}, 0, len(args)-1)
+	ags := make([]any, 0, len(args)-1)
 	for _, value := range args[1:] {
 		ags = append(ags, value.Get(ctx))
 	}
@@ -148,7 +148,7 @@ func funcSprintf(ctx Context, args ...Value) interface{} {
 	return fmt.Sprintf(StringOf(args[0].Get(ctx)), ags...)
 }
 
-func funcOr(ctx Context, args ...Value) interface{} {
+func funcOr(ctx Context, args ...Value) any {
 	for _, arg := range args {
 		val := arg.Get(ctx)
 		if notNil(val) {
@@ -158,7 +158,7 @@ func funcOr(ctx Context, args ...Value) interface{} {
 	return nil
 }
 
-func funcDelete(ctx Context, args ...Value) interface{} {
+func funcDelete(ctx Context, args ...Value) any {
 	for _, arg := range args {
 		delete(ctx, StringOf(arg.Get(ctx)))
 	}

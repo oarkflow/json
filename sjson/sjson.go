@@ -438,14 +438,14 @@ func isOptimisticPath(path string) bool {
 //	"name.last"          >> "Anderson"
 //	"age"                >> 37
 //	"children.1"         >> "Alex"
-func Set(json, path string, value interface{}) (string, error) {
+func Set(json, path string, value any) (string, error) {
 	return SetOptions(json, path, value, nil)
 }
 
 // SetBytes sets a json value for the specified path.
 // If working with bytes, this method preferred over
 // Set(string(data), path, value)
-func SetBytes(json []byte, path string, value interface{}) ([]byte, error) {
+func SetBytes(json []byte, path string, value any) ([]byte, error) {
 	return SetBytesOptions(json, path, value, nil)
 }
 
@@ -615,7 +615,7 @@ func setComplexPath(jstr, path, raw string, stringify bool) ([]byte, error) {
 // This function expects that the json is well-formed, and does not validate.
 // Invalid json will not panic, but it may return back unexpected results.
 // An error is returned if the path is not valid.
-func SetOptions(json, path string, value interface{},
+func SetOptions(json, path string, value any,
 	opts *Options) (string, error) {
 	if opts != nil {
 		if opts.ReplaceInPlace {
@@ -636,7 +636,7 @@ func SetOptions(json, path string, value interface{},
 // SetBytesOptions sets a json value for the specified path with options.
 // If working with bytes, this method preferred over
 // SetOptions(string(data), path, value)
-func SetBytesOptions(js []byte, path string, value interface{},
+func SetBytesOptions(js []byte, path string, value any,
 	opts *Options) ([]byte, error) {
 	var optimistic, inplace bool
 	if opts != nil {

@@ -9,16 +9,16 @@ func SetFunc(name string, fun Func) {
 	valueFuncs[name] = fun
 }
 
-type Context map[string]interface{}
+type Context map[string]any
 type Value interface {
-	Get(ctx Context) interface{}
+	Get(ctx Context) any
 }
 
 type Const struct {
-	Val interface{}
+	Val any
 }
 
-func (c Const) Get(ctx Context) interface{} {
+func (c Const) Get(ctx Context) any {
 	return c.Val
 }
 
@@ -26,8 +26,8 @@ type Var struct {
 	Key *JsonPathCompiled
 }
 
-func (v Var) Get(ctx Context) interface{} {
-	val, err := v.Key.Get(map[string]interface{}(ctx))
+func (v Var) Get(ctx Context) any {
+	val, err := v.Key.Get(map[string]any(ctx))
 	if err != nil {
 		return nil
 	}
@@ -39,7 +39,7 @@ type VarFunc struct {
 	args    []Value
 }
 
-func (v VarFunc) Get(ctx Context) interface{} {
+func (v VarFunc) Get(ctx Context) any {
 	fun := valueFuncs[v.funName]
 	if fun == nil {
 		return nil
@@ -48,9 +48,9 @@ func (v VarFunc) Get(ctx Context) interface{} {
 
 }
 
-type Func func(ctx Context, args ...Value) interface{}
+type Func func(ctx Context, args ...Value) any
 
-func parseFuncValue(name string, args []interface{}) (Value, error) {
+func parseFuncValue(name string, args []any) (Value, error) {
 	argsv := make([]Value, len(args))
 	for idx, arg := range args {
 		argv, err := parseValue(arg)
@@ -66,13 +66,13 @@ func parseFuncValue(name string, args []interface{}) (Value, error) {
 	}, nil
 }
 
-func parseValue(i interface{}) (Value, error) {
+func parseValue(i any) (Value, error) {
 	switch i.(type) {
-	case map[string]interface{}:
-		m := i.(map[string]interface{})
+	case map[string]any:
+		m := i.(map[string]any)
 		funName := StringOf(m["func"])
 		if valueFuncs[funName] != nil {
-			args, ok := m["args"].([]interface{})
+			args, ok := m["args"].([]any)
 			if !ok {
 				return &Const{
 					Val: i,
@@ -94,8 +94,8 @@ func parseValue(i interface{}) (Value, error) {
 			return &Var{Key: jp}, nil
 		}
 		return &Const{Val: i}, nil
-	case []interface{}:
-		vv := i.([]interface{})
+	case []any:
+		vv := i.([]any)
 		if len(vv) > 1 {
 			str := StringOf(vv[0])
 			if len(str) > 0 && str[0] == '$' {

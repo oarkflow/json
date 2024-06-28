@@ -11,7 +11,7 @@ type Pattern struct {
 	pattern string
 }
 
-func (p *Pattern) Validate(c *ValidateCtx, value interface{}) {
+func (p *Pattern) Validate(c *ValidateCtx, value any) {
 	str, ok := value.(string)
 	if !ok {
 		return
@@ -24,7 +24,7 @@ func (p *Pattern) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewPattern(i interface{}, path string, parent Validator) (Validator, error) {
+func NewPattern(i any, path string, parent Validator) (Validator, error) {
 	str, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("%s is not a string when assign regexp,path:%s", str, path)
@@ -79,7 +79,7 @@ type Format struct {
 	validateFunc FormatValidateFunc
 }
 
-func (f *Format) Validate(c *ValidateCtx, value interface{}) {
+func (f *Format) Validate(c *ValidateCtx, value any) {
 	str, ok := value.(string)
 	if !ok {
 		return
@@ -87,7 +87,7 @@ func (f *Format) Validate(c *ValidateCtx, value interface{}) {
 	f.validateFunc(c, f.Path, str)
 }
 
-func NewFormat(i interface{}, path string, parent Validator) (Validator, error) {
+func NewFormat(i any, path string, parent Validator) (Validator, error) {
 	s, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("value of format must be string:%v,path:%s", desc(i), path)

@@ -9,10 +9,10 @@ import (
 
 var data = []byte(`
 {
-	"email": "2021-01-01"
+	"user_id": 1
 }
 `)
-var schemeBytes = []byte(`{"properties":{"client_disposition_name":{"type":"string"},"encounter_dos":{"type":"string"},"encounter_dos_end":{"type":["string","null"]},"encounter_ins_type":{"type":["string","null"]},"encounter_type":{"type":["string","null"]},"facility_id":{"type":"integer"},"patient_dob":{"type":"string"},"patient_fin":{"type":"string"},"patient_mrn":{"type":"string"},"patient_name":{"type":"string"},"patient_sex":{"type":"string"},"wid":{"type":"string","in":"param"}},"type":"object","description":"Add new encounter and start coding"}`)
+var schemeBytes = []byte(`{"type":"object","description":"users","properties":{"avatar":{"type":"string","maxLength":255},"created_at":{"type":"string","default":"now()"},"created_by":{"type":"integer","maxLength":64},"deleted_at":{"type":"string"},"email":{"type":"string","maxLength":255,"default":"'s.baniya.np@gmail.com'"},"email_verified_at":{"type":"string"},"first_name":{"type":"string","maxLength":255},"is_active":{"type":"boolean","default":"false"},"last_name":{"type":"string","maxLength":255},"middle_name":{"type":"string","maxLength":255},"status":{"type":"string","maxLength":30},"title":{"type":"string","maxLength":10},"updated_at":{"type":"string","default":"now()"},"updated_by":{"type":"integer","maxLength":64},"user_id":{"type":"integer","maxLength":64},"verification_token":{"type":"string","maxLength":255}},"required":["email"],"primaryKeys":["user_id"]}`)
 
 var schema = []byte(`{
 				"type": "object",

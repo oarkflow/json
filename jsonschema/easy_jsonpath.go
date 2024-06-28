@@ -74,18 +74,18 @@ type JsonPathCompiled struct {
 	tokens []*token
 }
 
-func (c *JsonPathCompiled) Get(i interface{}) (interface{}, error) {
+func (c *JsonPathCompiled) Get(i any) (any, error) {
 	vi := i
 	for _, token := range c.tokens {
 		if token.key != "" {
-			m, ok := vi.(map[string]interface{})
+			m, ok := vi.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("try to get '%s' at not object value", token.key)
 			}
 			vi = m[token.key]
 		}
 		if token.index >= 0 {
-			arr, ok := vi.([]interface{})
+			arr, ok := vi.([]any)
 			if !ok {
 				return nil, fmt.Errorf("try to index '%d' at not array value", token.index)
 			}
@@ -98,13 +98,13 @@ func (c *JsonPathCompiled) Get(i interface{}) (interface{}, error) {
 	return vi, nil
 }
 
-func (c *JsonPathCompiled) Set(in interface{}, val interface{}) error {
+func (c *JsonPathCompiled) Set(in any, val any) error {
 	vi := in
 	vip := in
 	for i, token := range c.tokens {
 		if i < len(c.tokens)-1 {
 			if token.key != "" {
-				m, ok := vi.(map[string]interface{})
+				m, ok := vi.(map[string]any)
 				if !ok {
 					return fmt.Errorf("try to set at not map val:in=%v", in)
 				}
@@ -112,7 +112,7 @@ func (c *JsonPathCompiled) Set(in interface{}, val interface{}) error {
 				vip = m
 			}
 			if token.index >= 0 {
-				arr, ok := vi.([]interface{})
+				arr, ok := vi.([]any)
 				if !ok {
 					return fmt.Errorf("try to index '%d' at not array value", token.index)
 				}
@@ -124,7 +124,7 @@ func (c *JsonPathCompiled) Set(in interface{}, val interface{}) error {
 			}
 		} else {
 			if token.key != "" {
-				m, ok := vi.(map[string]interface{})
+				m, ok := vi.(map[string]any)
 				if !ok {
 					return fmt.Errorf("try to set at not map val:in=%v", in)
 				}
@@ -136,13 +136,13 @@ func (c *JsonPathCompiled) Set(in interface{}, val interface{}) error {
 				}
 			}
 			if token.index >= 0 {
-				arr, ok := vi.([]interface{})
+				arr, ok := vi.([]any)
 				if !ok {
 					return fmt.Errorf("try to set index '%d' at not array value", token.index)
 				}
 				if len(arr) <= token.index {
-					arr = append(arr, make([]interface{}, token.index-len(arr)+1)...)
-					m, ok := vip.(map[string]interface{})
+					arr = append(arr, make([]any, token.index-len(arr)+1)...)
+					m, ok := vip.(map[string]any)
 					if ok {
 						m[token.key] = arr
 					}

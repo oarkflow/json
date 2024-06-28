@@ -31,13 +31,13 @@ var types = map[string]_type{
 	"null":    typeNull,
 }
 
-type typeValidateFunc func(path string, c *ValidateCtx, value interface{})
+type typeValidateFunc func(path string, c *ValidateCtx, value any)
 
 var typeFuncs = [...]typeValidateFunc{
-	0: func(path string, c *ValidateCtx, value interface{}) {
+	0: func(path string, c *ValidateCtx, value any) {
 
 	},
-	typeString: func(path string, c *ValidateCtx, value interface{}) {
+	typeString: func(path string, c *ValidateCtx, value any) {
 		switch value.(type) {
 		case string, *string:
 			return
@@ -50,9 +50,9 @@ var typeFuncs = [...]typeValidateFunc{
 			Info: "Invalid type, expected: string , given: " + reflect.TypeOf(value).String(),
 		})
 	},
-	typeObject: func(path string, c *ValidateCtx, value interface{}) {
+	typeObject: func(path string, c *ValidateCtx, value any) {
 		switch value.(type) {
-		case map[string]interface{}, map[string]string:
+		case map[string]any, map[string]string:
 			return
 		default:
 			ty := reflect.TypeOf(value)
@@ -67,7 +67,7 @@ var typeFuncs = [...]typeValidateFunc{
 			Info: "Invalid type, expected: object , given: " + reflect.TypeOf(value).String(),
 		})
 	},
-	typeInteger: func(path string, c *ValidateCtx, value interface{}) {
+	typeInteger: func(path string, c *ValidateCtx, value any) {
 		if _, ok := value.(float64); !ok {
 			rt := reflect.TypeOf(value)
 			if isKind(rt, reflect.Int, reflect.Int16, reflect.Int8, reflect.Int32, reflect.Int64, reflect.Uint8,
@@ -90,7 +90,7 @@ var typeFuncs = [...]typeValidateFunc{
 		}
 	},
 
-	typeNumber: func(path string, c *ValidateCtx, value interface{}) {
+	typeNumber: func(path string, c *ValidateCtx, value any) {
 		if _, ok := value.(float64); !ok {
 			rt := reflect.TypeOf(value)
 			if isKind(rt, reflect.Int, reflect.Int16, reflect.Int8, reflect.Int32, reflect.Int64,
@@ -105,7 +105,7 @@ var typeFuncs = [...]typeValidateFunc{
 		}
 	},
 
-	typeBool: func(path string, c *ValidateCtx, value interface{}) {
+	typeBool: func(path string, c *ValidateCtx, value any) {
 		switch value.(type) {
 		case bool:
 			return
@@ -120,9 +120,9 @@ var typeFuncs = [...]typeValidateFunc{
 
 	},
 
-	typeArray: func(path string, c *ValidateCtx, value interface{}) {
+	typeArray: func(path string, c *ValidateCtx, value any) {
 		switch value.(type) {
-		case []interface{}:
+		case []any:
 			return
 		default:
 			if isKind(reflect.TypeOf(value), reflect.Slice, reflect.Array) {
@@ -135,7 +135,7 @@ var typeFuncs = [...]typeValidateFunc{
 		})
 
 	},
-	typeNull: func(path string, c *ValidateCtx, value interface{}) {
+	typeNull: func(path string, c *ValidateCtx, value any) {
 		switch value.(type) {
 		case nil:
 			return
@@ -171,7 +171,7 @@ type Type struct {
 	ValidateFunc typeValidateFunc
 }
 
-func (t *Type) Validate(c *ValidateCtx, value interface{}) {
+func (t *Type) Validate(c *ValidateCtx, value any) {
 
 	if value == nil {
 		return
@@ -179,7 +179,7 @@ func (t *Type) Validate(c *ValidateCtx, value interface{}) {
 	t.ValidateFunc(t.Path, c, value)
 }
 
-func NewType(i interface{}, path string, parent Validator) (Validator, error) {
+func NewType(i any, path string, parent Validator) (Validator, error) {
 	var ivs []string
 	switch i := i.(type) {
 	case []any:
@@ -222,7 +222,7 @@ type Types struct {
 	Type string
 }
 
-func (t *Types) Validate(c *ValidateCtx, value interface{}) {
+func (t *Types) Validate(c *ValidateCtx, value any) {
 
 	for _, v := range t.Vals {
 		cc := c.Clone()
@@ -237,7 +237,7 @@ func (t *Types) Validate(c *ValidateCtx, value interface{}) {
 	})
 }
 
-func NewTypes(i interface{}, path string, parent Validator) (Validator, error) {
+func NewTypes(i any, path string, parent Validator) (Validator, error) {
 	str, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("value of types must be string !like 'string|number'")
@@ -268,7 +268,7 @@ type MaxLength struct {
 	Path string
 }
 
-func (l *MaxLength) Validate(c *ValidateCtx, value interface{}) {
+func (l *MaxLength) Validate(c *ValidateCtx, value any) {
 
 	switch value.(type) {
 	case string:
@@ -278,8 +278,8 @@ func (l *MaxLength) Validate(c *ValidateCtx, value interface{}) {
 				Info: "length must be less or equal than " + strconv.Itoa(int(l.Val)),
 			})
 		}
-	case []interface{}:
-		if len(value.([]interface{})) > int(l.Val) {
+	case []any:
+		if len(value.([]any)) > int(l.Val) {
 			c.AddError(Error{
 				Path: l.Path,
 				Info: "length must be less or equal than " + strconv.Itoa(int(l.Val)),
@@ -289,7 +289,7 @@ func (l *MaxLength) Validate(c *ValidateCtx, value interface{}) {
 
 }
 
-func NewMaxLen(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMaxLen(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'maxLength' must be int: %v,path:%s", desc(i), path)
@@ -303,7 +303,7 @@ func NewMaxLen(i interface{}, path string, parent Validator) (Validator, error) 
 	}, nil
 }
 
-func NewMinLen(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMinLen(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'minLength' must be int: %v,path:%s", desc(i), path)
@@ -317,7 +317,7 @@ func NewMinLen(i interface{}, path string, parent Validator) (Validator, error) 
 	}, nil
 }
 
-func NewMinimum(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMinimum(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'minimum' must be int:%v,path:%s", desc(i), path)
@@ -345,7 +345,7 @@ type MinLength struct {
 	Path string
 }
 
-func (l *MinLength) Validate(c *ValidateCtx, value interface{}) {
+func (l *MinLength) Validate(c *ValidateCtx, value any) {
 	switch value.(type) {
 	case string:
 		if len(value.(string)) < int(l.Val) {
@@ -354,8 +354,8 @@ func (l *MinLength) Validate(c *ValidateCtx, value interface{}) {
 				Path: l.Path,
 			})
 		}
-	case []interface{}:
-		if len(value.([]interface{})) < int(l.Val) {
+	case []any:
+		if len(value.([]any)) < int(l.Val) {
 			c.AddError(Error{
 				Info: "length must be larger or equal than " + strconv.Itoa(int(l.Val)),
 				Path: l.Path,
@@ -370,7 +370,7 @@ type Maximum struct {
 	exclusiveMaximum bool
 }
 
-func NewMaximum(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMaximum(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'maximum' must be int")
@@ -394,7 +394,7 @@ func NewMaximum(i interface{}, path string, parent Validator) (Validator, error)
 	}, nil
 }
 
-func (m *Maximum) Validate(c *ValidateCtx, value interface{}) {
+func (m *Maximum) Validate(c *ValidateCtx, value any) {
 	val, ok := valueOfFloat(value)
 	if !ok {
 		return
@@ -416,7 +416,7 @@ func (m *Maximum) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func valueOfFloat(value interface{}) (float64, bool) {
+func valueOfFloat(value any) (float64, bool) {
 	val, ok := value.(float64)
 	if ok {
 		return val, true
@@ -444,7 +444,7 @@ type Minimum struct {
 	exclusiveMinimum bool
 }
 
-func (m Minimum) Validate(c *ValidateCtx, value interface{}) {
+func (m Minimum) Validate(c *ValidateCtx, value any) {
 	val, ok := valueOfFloat(value)
 	if !ok {
 		return
@@ -467,11 +467,11 @@ func (m Minimum) Validate(c *ValidateCtx, value interface{}) {
 }
 
 type Enums struct {
-	Val  []interface{}
+	Val  []any
 	Path string
 }
 
-func (enums *Enums) Validate(c *ValidateCtx, value interface{}) {
+func (enums *Enums) Validate(c *ValidateCtx, value any) {
 	if value == nil {
 		return
 	}
@@ -492,8 +492,8 @@ func (enums *Enums) Validate(c *ValidateCtx, value interface{}) {
 	})
 }
 
-func NewEnums(i interface{}, path string, parent Validator) (Validator, error) {
-	arr, ok := i.([]interface{})
+func NewEnums(i any, path string, parent Validator) (Validator, error) {
+	arr, ok := i.([]any)
 	if !ok {
 		return nil, fmt.Errorf("value of 'enums' must be arr:%v,path:%s", desc(i), path)
 	}
@@ -509,8 +509,8 @@ type Required struct {
 	rMap map[string]bool
 }
 
-func (r *Required) Validate(c *ValidateCtx, value interface{}) {
-	m, ok := value.(map[string]interface{})
+func (r *Required) Validate(c *ValidateCtx, value any) {
+	m, ok := value.(map[string]any)
 	if !ok {
 
 		return
@@ -567,8 +567,8 @@ func (r *Required) validateStruct(c *ValidateCtx, v reflect.Value) {
 
 }
 
-func NewRequired(i interface{}, path string, parent Validator) (Validator, error) {
-	arr, ok := i.([]interface{})
+func NewRequired(i any, path string, parent Validator) (Validator, error) {
+	arr, ok := i.([]any)
 	if !ok {
 		return nil, fmt.Errorf("value of 'required' must be array:%v", i)
 	}
@@ -612,7 +612,7 @@ type Items struct {
 	additionalItems Validator
 }
 
-func (item *Items) validateStruct(c *ValidateCtx, val interface{}) {
+func (item *Items) validateStruct(c *ValidateCtx, val any) {
 	v := reflect.ValueOf(val)
 	switch v.Kind() {
 	case reflect.Slice:
@@ -626,11 +626,11 @@ func (item *Items) validateStruct(c *ValidateCtx, val interface{}) {
 	}
 }
 
-func (i *Items) Validate(c *ValidateCtx, value interface{}) {
+func (i *Items) Validate(c *ValidateCtx, value any) {
 	if value == nil {
 		return
 	}
-	arr, ok := value.([]interface{})
+	arr, ok := value.([]any)
 	if !ok {
 		i.validateStruct(c, value)
 		return
@@ -644,8 +644,8 @@ func (i *Items) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewItems(i interface{}, path string, parent Validator) (Validator, error) {
-	m, ok := i.(map[string]interface{})
+func NewItems(i any, path string, parent Validator) (Validator, error) {
+	m, ok := i.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("cannot create items with not object type: %v,path:%s", desc(i), path)
 	}
@@ -663,7 +663,7 @@ func NewItems(i interface{}, path string, parent Validator) (Validator, error) {
 type additionalItems struct {
 }
 
-func (a *additionalItems) Validate(c *ValidateCtx, value interface{}) {
+func (a *additionalItems) Validate(c *ValidateCtx, value any) {
 
 }
 
@@ -672,7 +672,7 @@ type MultipleOf struct {
 	Path string
 }
 
-func (m MultipleOf) Validate(c *ValidateCtx, value interface{}) {
+func (m MultipleOf) Validate(c *ValidateCtx, value any) {
 	v, ok := value.(float64)
 	if !ok {
 		return
@@ -687,7 +687,7 @@ func (m MultipleOf) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewMultipleOf(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMultipleOf(i any, path string, parent Validator) (Validator, error) {
 	m, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf(" value of multipleOf must be an active number %v,path:%s", desc(i), path)
@@ -703,7 +703,7 @@ type MaxB64DLength struct {
 	Path string
 }
 
-func (l *MaxB64DLength) Validate(c *ValidateCtx, value interface{}) {
+func (l *MaxB64DLength) Validate(c *ValidateCtx, value any) {
 
 	switch value.(type) {
 	case string:
@@ -719,7 +719,7 @@ func (l *MaxB64DLength) Validate(c *ValidateCtx, value interface{}) {
 
 }
 
-func NewMaxB64DLen(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMaxB64DLen(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'maxB64DLen' must be int: %v,path:%s", desc(i), path)
@@ -738,7 +738,7 @@ type MinB64DLength struct {
 	Path string
 }
 
-func (l *MinB64DLength) Validate(c *ValidateCtx, value interface{}) {
+func (l *MinB64DLength) Validate(c *ValidateCtx, value any) {
 
 	switch value.(type) {
 	case string:
@@ -754,7 +754,7 @@ func (l *MinB64DLength) Validate(c *ValidateCtx, value interface{}) {
 
 }
 
-func NewMinB64DLength(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMinB64DLength(i any, path string, parent Validator) (Validator, error) {
 	v, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of 'minB64DLen' must be int: %v,path:%s", desc(i), path)
@@ -773,7 +773,7 @@ type constValidator struct {
 	V    string
 }
 
-func (c2 constValidator) Validate(c *ValidateCtx, value interface{}) {
+func (c2 constValidator) Validate(c *ValidateCtx, value any) {
 	if StringOf(value) == c2.V {
 		return
 	}
@@ -783,7 +783,7 @@ func (c2 constValidator) Validate(c *ValidateCtx, value interface{}) {
 	})
 }
 
-func NewConst(i interface{}, path string, parent Validator) (Validator, error) {
+func NewConst(i any, path string, parent Validator) (Validator, error) {
 	return &constValidator{
 		Path: path,
 		V:    StringOf(i),

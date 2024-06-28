@@ -17,17 +17,17 @@ type MinProperties struct {
 	Value int
 }
 
-func (m *MinProperties) Validate(c *ValidateCtx, value interface{}) {
+func (m *MinProperties) Validate(c *ValidateCtx, value any) {
 	switch value.(type) {
-	case map[string]interface{}:
-		if len(value.(map[string]interface{})) < m.Value {
+	case map[string]any:
+		if len(value.(map[string]any)) < m.Value {
 			c.AddError(Error{
 				Path: m.Path,
 				Info: fmt.Sprintf("min properties is : %d", m.Value),
 			})
 		}
-	case []interface{}:
-		if len(value.([]interface{})) < m.Value {
+	case []any:
+		if len(value.([]any)) < m.Value {
 			c.AddError(Error{
 				Path: m.Path,
 				Info: fmt.Sprintf("min properties is : %d", m.Value),
@@ -36,7 +36,7 @@ func (m *MinProperties) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewMinProperties(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMinProperties(i any, path string, parent Validator) (Validator, error) {
 	fi, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of minProperties must be number:%v,path:%s", desc(i), path)
@@ -55,17 +55,17 @@ type MaxProperties struct {
 	Value int
 }
 
-func (m *MaxProperties) Validate(c *ValidateCtx, value interface{}) {
+func (m *MaxProperties) Validate(c *ValidateCtx, value any) {
 	switch value.(type) {
-	case map[string]interface{}:
-		if len(value.(map[string]interface{})) > m.Value {
+	case map[string]any:
+		if len(value.(map[string]any)) > m.Value {
 			c.AddError(Error{
 				Path: m.Path,
 				Info: fmt.Sprintf("max properties is :%v ", m.Value),
 			})
 		}
-	case []interface{}:
-		if len(value.([]interface{})) > m.Value {
+	case []any:
+		if len(value.([]any)) > m.Value {
 			c.AddError(Error{
 				Path: m.Path,
 				Info: fmt.Sprintf("max properties is :%v", m.Value),
@@ -74,7 +74,7 @@ func (m *MaxProperties) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewMaxProperties(i interface{}, path string, parent Validator) (Validator, error) {
+func NewMaxProperties(i any, path string, parent Validator) (Validator, error) {
 	fi, ok := i.(float64)
 	if !ok {
 		return nil, fmt.Errorf("value of maxProperties must be number:%v,path:%s", desc(i), path)
@@ -90,7 +90,7 @@ func NewMaxProperties(i interface{}, path string, parent Validator) (Validator, 
 
 type OneOf []Validator
 
-func (a OneOf) Validate(c *ValidateCtx, value interface{}) {
+func (a OneOf) Validate(c *ValidateCtx, value any) {
 	allErrs := []Error{}
 	for _, validator := range a {
 		cb := c.Clone()
@@ -104,8 +104,8 @@ func (a OneOf) Validate(c *ValidateCtx, value interface{}) {
 	c.AddErrors(allErrs...)
 }
 
-func NewOneOf(i interface{}, path string, parent Validator) (Validator, error) {
-	m, ok := i.([]interface{})
+func NewOneOf(i any, path string, parent Validator) (Validator, error) {
+	m, ok := i.([]any)
 	if !ok {
 		return nil, fmt.Errorf("value of oneOf must be array:%v,path:%s", desc(i), path)
 	}

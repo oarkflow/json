@@ -12,10 +12,10 @@ import (
 
 type Schema struct {
 	prop Validator
-	i    interface{}
+	i    any
 }
 
-func NewSchema(i map[string]interface{}) (*Schema, error) {
+func NewSchema(i map[string]any) (*Schema, error) {
 	s := &Schema{}
 	s.i = i
 	p, err := NewProp(i, "$")
@@ -27,7 +27,7 @@ func NewSchema(i map[string]interface{}) (*Schema, error) {
 }
 
 func NewSchemaFromJSON(j []byte) (*Schema, error) {
-	var i map[string]interface{}
+	var i map[string]any
 	err := json.Unmarshal(j, &i)
 	if err != nil {
 		return nil, err
@@ -35,7 +35,7 @@ func NewSchemaFromJSON(j []byte) (*Schema, error) {
 	return NewSchema(i)
 }
 func (s *Schema) UnmarshalJSON(b []byte) error {
-	var i interface{}
+	var i any
 	if err := json.Unmarshal(b, &i); err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ var (
 	}
 )
 
-func (s *Schema) ValidateObject(i interface{}) error {
+func (s *Schema) ValidateObject(i any) error {
 	c := vctPool.Get().(*ValidateCtx)
 	c.root = s.prop
 	c.errors = c.errors[:0]
@@ -77,7 +77,7 @@ func (s *Schema) ValidateObject(i interface{}) error {
 	return errors.New(errsToString(c.errors))
 }
 
-func (s *Schema) Validate(i interface{}) error {
+func (s *Schema) Validate(i any) error {
 
 	c := vctPool.Get().(*ValidateCtx)
 	c.root = s.prop
@@ -94,8 +94,8 @@ func (s *Schema) Validate(i interface{}) error {
 	return errors.New(errsToString(c.errors))
 }
 
-func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template interface{}) (err error) {
-	var i interface{}
+func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template any) (err error) {
+	var i any
 	err = json.Unmarshal(data, &i)
 	if err != nil {
 		return err
@@ -107,7 +107,7 @@ func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template interface{}) (er
 	return UnmarshalFromMap(i, template)
 }
 
-func scaleObject(i interface{}) (o interface{}, err error) {
+func scaleObject(i any) (o any, err error) {
 	switch d := i.(type) {
 	case []byte:
 		err = json.Unmarshal(d, &o)
@@ -126,7 +126,7 @@ func scaleObject(i interface{}) (o interface{}, err error) {
 	}
 }
 
-func (s *Schema) ValidateError(i interface{}) []Error {
+func (s *Schema) ValidateError(i any) []Error {
 	c := &ValidateCtx{}
 	s.prop.Validate(c, i)
 	return c.errors
@@ -164,7 +164,7 @@ var (
 	globalSchemas = map[reflect.Type]*Schema{}
 )
 
-func RegisterSchema(typ interface{}) error {
+func RegisterSchema(typ any) error {
 	sc, err := GenerateSchema(typ)
 	if err != nil {
 		return err
@@ -173,13 +173,13 @@ func RegisterSchema(typ interface{}) error {
 	return nil
 }
 
-func MustRegisterSchema(typ interface{}) {
+func MustRegisterSchema(typ any) {
 	if err := RegisterSchema(typ); err != nil {
 		panic("register schema error" + err.Error())
 	}
 }
 
-func Validate(i interface{}) error {
+func Validate(i any) error {
 	t := reflect.TypeOf(i)
 	sc := globalSchemas[t]
 	if sc == nil {

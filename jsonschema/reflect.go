@@ -26,13 +26,13 @@ const (
 	_Required   = "required"
 )
 
-func GenerateSchema(i interface{}) (*Schema, error) {
+func GenerateSchema(i any) (*Schema, error) {
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 
-	schema := map[string]interface{}{}
+	schema := map[string]any{}
 	err := parseSchema(schema, t, nil)
 	if err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func GenerateSchema(i interface{}) (*Schema, error) {
 	return sc, err
 }
 
-func GenerateSchemaAsString(i interface{}) (string, error) {
+func GenerateSchemaAsString(i any) (string, error) {
 	schema, err := GenerateSchema(i)
 	if err != nil {
 		return "", err
@@ -59,25 +59,25 @@ func AddRefString(validates ...string) {
 	stringFieldsParses = append(stringFieldsParses, validates...)
 }
 
-func parseSchema(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) (err error) {
+func parseSchema(sc map[string]any, t reflect.Type, field *reflect.StructField) (err error) {
 	switch t.Kind() {
 	case reflect.Ptr:
 		t = t.Elem()
 		return parseSchema(sc, t, field)
 	case reflect.Struct:
-		properties := map[string]interface{}{}
+		properties := map[string]any{}
 		sc[_Properties] = properties
 		sc[_Type] = _Object
-		requires := make([]interface{}, 0)
+		requires := make([]any, 0)
 		for i := 0; i < t.NumField(); i++ {
 			fi := t.Field(i)
 			if fi.Anonymous {
-				fisc := map[string]interface{}{}
+				fisc := map[string]any{}
 				err = parseSchema(fisc, fi.Type, &fi)
 				if err != nil {
 					return err
 				}
-				fp, _ := fisc[_Properties].(map[string]interface{})
+				fp, _ := fisc[_Properties].(map[string]any)
 				for key, val := range fp {
 					properties[key] = val
 				}
@@ -89,7 +89,7 @@ func parseSchema(sc map[string]interface{}, t reflect.Type, field *reflect.Struc
 			} else {
 				tag, _, _ = strings.Cut(tag, ",")
 			}
-			fiv := map[string]interface{}{}
+			fiv := map[string]any{}
 			properties[tag] = fiv
 			required := fi.Tag.Get("required")
 			if isTure(required) {
@@ -159,7 +159,7 @@ func parseSchema(sc map[string]interface{}, t reflect.Type, field *reflect.Struc
 		}
 	case reflect.Slice:
 		sc[_Type] = _Array
-		items := map[string]interface{}{}
+		items := map[string]any{}
 		sc[_Items] = items
 		err = parseSchema(items, t.Elem(), nil)
 		if err != nil {
@@ -179,13 +179,13 @@ func parseSchema(sc map[string]interface{}, t reflect.Type, field *reflect.Struc
 		if t.Elem().Kind() == reflect.Interface {
 			sc["additionalProperties"] = true
 		} else {
-			addi := map[string]interface{}{}
+			addi := map[string]any{}
 			err = parseSchema(addi, t.Elem(), nil)
 			if err != nil {
 				return err
 			}
 			sc["additionalProperties"] = addi
-			sc["properties"] = map[string]interface{}{}
+			sc["properties"] = map[string]any{}
 
 		}
 
@@ -195,9 +195,9 @@ func parseSchema(sc map[string]interface{}, t reflect.Type, field *reflect.Struc
 	return nil
 }
 
-type parseFunc = func(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error
+type parseFunc = func(sc map[string]any, t reflect.Type, field *reflect.StructField) error
 
-func parseMaximum(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMaximum(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	maximum := field.Tag.Get(_Maximum)
 	if maximum != "" {
 		num, err := strconv.ParseFloat(maximum, 64)
@@ -209,7 +209,7 @@ func parseMaximum(sc map[string]interface{}, t reflect.Type, field *reflect.Stru
 	return nil
 }
 
-func parseMinimum(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMinimum(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	minimum := field.Tag.Get(_Minimum)
 	if minimum != "" {
 		num, err := strconv.ParseFloat(minimum, 64)
@@ -221,7 +221,7 @@ func parseMinimum(sc map[string]interface{}, t reflect.Type, field *reflect.Stru
 	return nil
 }
 
-func doParses(funs []parseFunc, sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func doParses(funs []parseFunc, sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	for _, fun := range funs {
 		if err := fun(sc, t, field); err != nil {
 			return err
@@ -230,12 +230,12 @@ func doParses(funs []parseFunc, sc map[string]interface{}, t reflect.Type, field
 	return nil
 }
 
-func parseEnumString(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseEnumString(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 
 	enums := field.Tag.Get(_Enum)
 	if len(enums) > 0 {
 		eus := strings.Split(enums, ",")
-		eusi := make([]interface{}, len(eus))
+		eusi := make([]any, len(eus))
 		for i, s := range eus {
 			eusi[i] = s
 		}
@@ -244,11 +244,11 @@ func parseEnumString(sc map[string]interface{}, t reflect.Type, field *reflect.S
 	return nil
 }
 
-func parseEnumNumber(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseEnumNumber(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	enums := field.Tag.Get(_Enum)
 	if len(enums) > 0 {
 		eus := strings.Split(enums, ",")
-		eusi := make([]interface{}, len(eus))
+		eusi := make([]any, len(eus))
 		for i, s := range eus {
 			num, err := strconv.Atoi(s)
 			if err != nil {
@@ -261,11 +261,11 @@ func parseEnumNumber(sc map[string]interface{}, t reflect.Type, field *reflect.S
 	return nil
 }
 
-func parseEnumInt(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseEnumInt(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	enums := field.Tag.Get(_Enum)
 	if len(enums) > 0 {
 		eus := strings.Split(enums, ",")
-		eusi := make([]interface{}, len(eus))
+		eusi := make([]any, len(eus))
 		for i, s := range eus {
 			num, err := strconv.ParseFloat(s, 64)
 			if err != nil {
@@ -278,7 +278,7 @@ func parseEnumInt(sc map[string]interface{}, t reflect.Type, field *reflect.Stru
 	return nil
 }
 
-func parseMaxlength(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMaxlength(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	maxLen := field.Tag.Get(_MaxLength)
 	if len(maxLen) > 0 {
 		num, err := strconv.Atoi(maxLen)
@@ -290,7 +290,7 @@ func parseMaxlength(sc map[string]interface{}, t reflect.Type, field *reflect.St
 	return nil
 }
 
-func parseMinlength(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMinlength(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	minLength := field.Tag.Get(_MinLength)
 	if len(minLength) > 0 {
 		num, err := strconv.Atoi(minLength)
@@ -302,7 +302,7 @@ func parseMinlength(sc map[string]interface{}, t reflect.Type, field *reflect.St
 	return nil
 }
 
-func parseDefaultValue(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseDefaultValue(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("default")
 	if def != "" {
 		val, err := formatValue(def, t)
@@ -314,7 +314,7 @@ func parseDefaultValue(sc map[string]interface{}, t reflect.Type, field *reflect
 	return nil
 }
 
-func formatValue(val string, t reflect.Type) (interface{}, error) {
+func formatValue(val string, t reflect.Type) (any, error) {
 	switch t.Kind() {
 	case reflect.String:
 		return val, nil
@@ -332,7 +332,7 @@ func formatValue(val string, t reflect.Type) (interface{}, error) {
 	}
 }
 
-func parsePattern(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parsePattern(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("pattern")
 	if def != "" {
 		sc["pattern"] = def
@@ -340,7 +340,7 @@ func parsePattern(sc map[string]interface{}, t reflect.Type, field *reflect.Stru
 	return nil
 }
 
-func parseFormat(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseFormat(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("format")
 	if def != "" {
 		sc["format"] = def
@@ -348,7 +348,7 @@ func parseFormat(sc map[string]interface{}, t reflect.Type, field *reflect.Struc
 	return nil
 }
 
-func parseMultipleOf(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMultipleOf(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("multipleOf")
 	if def != "" {
 		data, err := strconv.ParseFloat(def, 64)
@@ -360,7 +360,7 @@ func parseMultipleOf(sc map[string]interface{}, t reflect.Type, field *reflect.S
 	return nil
 }
 
-func parseMaxItems(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMaxItems(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("maxItems")
 	if def != "" {
 		data, err := strconv.Atoi(def)
@@ -372,7 +372,7 @@ func parseMaxItems(sc map[string]interface{}, t reflect.Type, field *reflect.Str
 	return nil
 }
 
-func parseMinItems(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseMinItems(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("minItems")
 	if def != "" {
 		data, err := strconv.Atoi(def)
@@ -383,7 +383,7 @@ func parseMinItems(sc map[string]interface{}, t reflect.Type, field *reflect.Str
 	}
 	return nil
 }
-func parseUniqueItems(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+func parseUniqueItems(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 	def := field.Tag.Get("uniqueItems")
 	if def != "" {
 		data, err := strconv.ParseBool(def)
@@ -405,7 +405,7 @@ func newParseFuncs(ss []string) []parseFunc {
 }
 
 func newParseFunc(f string) parseFunc {
-	return func(sc map[string]interface{}, t reflect.Type, field *reflect.StructField) error {
+	return func(sc map[string]any, t reflect.Type, field *reflect.StructField) error {
 		def := field.Tag.Get(f)
 		if def != "" {
 			sc[f] = def

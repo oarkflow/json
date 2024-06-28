@@ -40,10 +40,10 @@ func (v *ValidateCtx) Clone() *ValidateCtx {
 }
 
 type Validator interface {
-	Validate(c *ValidateCtx, value interface{})
+	Validate(c *ValidateCtx, value any)
 }
 
-type NewValidatorFunc func(i interface{}, path string, parent Validator) (Validator, error)
+type NewValidatorFunc func(i any, path string, parent Validator) (Validator, error)
 
 func appendString(s ...string) string {
 	sb := strings.Builder{}
@@ -53,11 +53,11 @@ func appendString(s ...string) string {
 	return sb.String()
 }
 
-func panicf(f string, args ...interface{}) {
+func panicf(f string, args ...any) {
 	panic(fmt.Sprintf(f, args...))
 }
 
-func StringOf(v interface{}) string {
+func StringOf(v any) string {
 	switch vv := v.(type) {
 	case string:
 		return vv
@@ -77,7 +77,7 @@ func StringOf(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
-func NumberOf(v interface{}) float64 {
+func NumberOf(v any) float64 {
 	switch vv := v.(type) {
 	case float64:
 		return vv
@@ -99,7 +99,7 @@ func NumberOf(v interface{}) float64 {
 	return 0
 }
 
-func BoolOf(v interface{}) bool {
+func BoolOf(v any) bool {
 	switch vv := v.(type) {
 	case float64:
 		return vv > 0
@@ -115,7 +115,7 @@ func BoolOf(v interface{}) bool {
 	return false
 }
 
-func notNil(v interface{}) bool {
+func notNil(v any) bool {
 	switch v := v.(type) {
 	case string:
 		return v != ""
@@ -126,11 +126,11 @@ func notNil(v interface{}) bool {
 	return true
 }
 
-func Equal(a, b interface{}) bool {
+func Equal(a, b any) bool {
 	return StringOf(a) == StringOf(b)
 }
 
-func desc(i interface{}) string {
+func desc(i any) string {
 	ty := reflect.TypeOf(i)
 	return fmt.Sprintf("value:%v,type:%s", i, ty.String())
 }

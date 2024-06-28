@@ -15,7 +15,7 @@ type defs struct {
 	schemas map[string]Validator
 }
 
-func (d *defs) Validate(c *ValidateCtx, value interface{}) {
+func (d *defs) Validate(c *ValidateCtx, value any) {
 
 }
 
@@ -23,12 +23,12 @@ func (d *defs) GetChild(path string) Validator {
 	return d.schemas[path]
 }
 
-var newDefs NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newDefs NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 	def := &defs{
 		schemas: map[string]Validator{},
 	}
 	switch v := i.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for name, prop := range v {
 			vad, err := NewProp(prop, "$")
 			if err != nil {

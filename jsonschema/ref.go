@@ -19,7 +19,7 @@ func (r *ref) isSelf(n Validator) bool {
 	return n == r || n == r.parent
 }
 
-func (r *ref) Validate(c *ValidateCtx, value interface{}) {
+func (r *ref) Validate(c *ValidateCtx, value any) {
 	node := c.root
 	for _, pth := range r.path {
 		switch nv := node.(type) {
@@ -62,7 +62,7 @@ func (r *ref) Validate(c *ValidateCtx, value interface{}) {
 
 }
 
-var newRef NewValidatorFunc = func(i interface{}, path string, parent Validator) (Validator, error) {
+var newRef NewValidatorFunc = func(i any, path string, parent Validator) (Validator, error) {
 	str, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("%s.$ref should be string", path)

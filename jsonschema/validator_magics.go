@@ -3,48 +3,60 @@ package jsonschema
 import (
 	"fmt"
 
-	"github.com/oarkflow/pkg/evaluate"
+	"github.com/oarkflow/expr"
 )
 
 type ConstVal struct {
-	Val interface{}
+	Val any
 }
 
-func (cc ConstVal) Validate(c *ValidateCtx, value interface{}) {
+func (cc ConstVal) Validate(c *ValidateCtx, value any) {
 
 }
 
 type DefaultVal struct {
-	Val interface{}
+	Val any
 }
 
-func (d DefaultVal) Validate(c *ValidateCtx, value interface{}) {
+func (d DefaultVal) Validate(c *ValidateCtx, value any) {
 
 }
 
 type ReplaceKey string
 
-func (r ReplaceKey) Validate(c *ValidateCtx, value interface{}) {
+func (r ReplaceKey) Validate(c *ValidateCtx, value any) {
 
 }
 
-func NewConstVal(i interface{}, path string, parent Validator) (Validator, error) {
+func NewConstVal(i any, path string, parent Validator) (Validator, error) {
 	return &ConstVal{
 		Val: i,
 	}, nil
 }
 
-func NewDefaultVal(i interface{}, path string, parent Validator) (Validator, error) {
-	p, _ := evaluate.Parse(fmt.Sprintf("%v", i), true)
-	pr := evaluate.NewEvalParams(make(map[string]interface{}))
-	val, err := p.Eval(pr)
-	if err == nil {
-		return &DefaultVal{val}, nil
+func NewDefaultVal(i any, path string, parent Validator) (Validator, error) {
+	data := make(map[string]any)
+	switch i := i.(type) {
+	case string:
+		val, err := expr.Eval(i, data)
+		if err == nil {
+			return &DefaultVal{val}, nil
+		}
+	case []byte:
+		val, err := expr.Eval(string(i), data)
+		if err == nil {
+			return &DefaultVal{val}, nil
+		}
+	default:
+		val, err := expr.Eval(fmt.Sprintf("%v", i), data)
+		if err == nil {
+			return &DefaultVal{val}, nil
+		}
 	}
 	return &DefaultVal{i}, nil
 }
 
-func NewReplaceKey(i interface{}, path string, parent Validator) (Validator, error) {
+func NewReplaceKey(i any, path string, parent Validator) (Validator, error) {
 	s, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("value of 'replaceKey' must be string :%v", i)
@@ -55,11 +67,11 @@ func NewReplaceKey(i interface{}, path string, parent Validator) (Validator, err
 
 type FormatVal _type
 
-func (f FormatVal) Validate(c *ValidateCtx, value interface{}) {
+func (f FormatVal) Validate(c *ValidateCtx, value any) {
 
 }
 
-func (f FormatVal) Convert(value interface{}) interface{} {
+func (f FormatVal) Convert(value any) any {
 	switch _type(f) {
 	case typeString:
 		return StringOf(value)
@@ -71,7 +83,7 @@ func (f FormatVal) Convert(value interface{}) interface{} {
 	return value
 }
 
-func NewFormatVal(i interface{}, path string, parent Validator) (Validator, error) {
+func NewFormatVal(i any, path string, parent Validator) (Validator, error) {
 	str, ok := i.(string)
 	if !ok {
 		return nil, fmt.Errorf("value of format must be string:%s", str)
@@ -81,8 +93,8 @@ func NewFormatVal(i interface{}, path string, parent Validator) (Validator, erro
 
 type SetVal map[*JsonPathCompiled]Value
 
-func (s SetVal) Validate(c *ValidateCtx, value interface{}) {
-	m, ok := value.(map[string]interface{})
+func (s SetVal) Validate(c *ValidateCtx, value any) {
+	m, ok := value.(map[string]any)
 	if !ok {
 		return
 	}
@@ -93,10 +105,10 @@ func (s SetVal) Validate(c *ValidateCtx, value interface{}) {
 	}
 }
 
-func NewSetVal(i interface{}, path string, parent Validator) (Validator, error) {
-	m, ok := i.(map[string]interface{})
+func NewSetVal(i any, path string, parent Validator) (Validator, error) {
+	m, ok := i.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("value of setVal must be map[string]interface{} :%v", i)
+		return nil, fmt.Errorf("value of setVal must be map[string]any :%v", i)
 	}
 	setVal := SetVal{}
 	for key, val := range m {

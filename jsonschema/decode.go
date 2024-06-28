@@ -8,7 +8,7 @@ import (
 	"unsafe"
 )
 
-func UnmarshalFromMap(in interface{}, template interface{}) error {
+func UnmarshalFromMap(in any, template any) error {
 	v := reflect.ValueOf(template)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
 		panic("template value is nil or not pointer")
@@ -21,7 +21,7 @@ var (
 	jsonUnmarshalType = reflect.TypeOf(json.Unmarshaler(nil))
 )
 
-func checkCustomUnmarshal(in interface{}, v reflect.Value) (bool, error) {
+func checkCustomUnmarshal(in any, v reflect.Value) (bool, error) {
 	jum, ok := v.Interface().(json.Unmarshaler)
 	if !ok {
 		return false, nil
@@ -37,7 +37,7 @@ func checkCustomUnmarshal(in interface{}, v reflect.Value) (bool, error) {
 	return true, nil
 }
 
-func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error {
+func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
 	if in == nil {
 		return nil
 	}
@@ -99,7 +99,7 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 		}
 		return unmarshalObject2Struct(path, in, v.Elem())
 	case reflect.Slice:
-		arr, ok := in.([]interface{})
+		arr, ok := in.([]any)
 		t := v.Type()
 		if !ok {
 			return fmt.Errorf("type of %s should be slice", path)
@@ -124,7 +124,7 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 		}
 		v.SetString(vv)
 	case reflect.Map:
-		vmap, ok := in.(map[string]interface{})
+		vmap, ok := in.(map[string]any)
 		if !ok {
 			return fmt.Errorf("type of %s should be object", path)
 		}
@@ -153,7 +153,7 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 	case reflect.Struct:
 		t := v.Type()
 
-		vmap, ok := in.(map[string]interface{})
+		vmap, ok := in.(map[string]any)
 		if !ok {
 			return fmt.Errorf("type of %s should be object", path)
 		}
@@ -231,7 +231,7 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 		v.SetFloat(floatV)
 		return nil
 	case reflect.Array:
-		arr, ok := in.([]interface{})
+		arr, ok := in.([]any)
 		if !ok {
 			return fmt.Errorf("type of %s should be slice", path)
 		}
@@ -258,7 +258,7 @@ func unmarshalObject2Struct(path string, in interface{}, v reflect.Value) error 
 	return nil
 }
 
-func intValueOf(v interface{}) (int64, error) {
+func intValueOf(v any) (int64, error) {
 	switch t := v.(type) {
 	case float64:
 		return int64(t), nil
@@ -275,7 +275,7 @@ func intValueOf(v interface{}) (int64, error) {
 	}
 }
 
-func boolValueOf(v interface{}) (bool, error) {
+func boolValueOf(v any) (bool, error) {
 	switch v := v.(type) {
 	case bool:
 		return v, nil
@@ -288,7 +288,7 @@ func boolValueOf(v interface{}) (bool, error) {
 	}
 }
 
-func floatValueOf(v interface{}) (float64, error) {
+func floatValueOf(v any) (float64, error) {
 	switch v := v.(type) {
 	case int:
 		return float64(v), nil
