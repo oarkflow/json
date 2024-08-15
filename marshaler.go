@@ -1,4 +1,4 @@
-package marshaler
+package json
 
 import (
 	"encoding/json"
@@ -16,8 +16,4 @@ func init() {
 
 func SetMarshaler(m Marshaler) {
 	marshaler = m
-}
-
-func Instance() Marshaler {
-	return marshaler
 }

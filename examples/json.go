@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/oarkflow/json"
 )
 
@@ -19,7 +20,7 @@ func main() {
 
 	for _, test := range tests {
 		d, err := json.Fix(test)
-		fmt.Println(d)
+		fmt.Println(d, json.IsValid(test))
 		if err != nil {
 			println("error", err.Error())
 		}

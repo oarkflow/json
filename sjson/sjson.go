@@ -2,11 +2,10 @@
 package sjson
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"unsafe"
-
-	"github.com/oarkflow/json/marshaler"
 )
 
 type errorType struct {
@@ -122,7 +121,7 @@ func mustMarshalString(s string) bool {
 // appendStringify makes a json string and appends to buf.
 func appendStringify(buf []byte, s string) []byte {
 	if mustMarshalString(s) {
-		b, _ := marshaler.Instance()(s)
+		b, _ := json.Marshal(s)
 		return append(buf, b...)
 	}
 	buf = append(buf, '"')
@@ -648,7 +647,7 @@ func SetBytesOptions(js []byte, path string, value any,
 	var err error
 	switch v := value.(type) {
 	default:
-		b, merr := marshaler.Instance()(value)
+		b, merr := json.Marshal(value)
 		if merr != nil {
 			return nil, merr
 		}

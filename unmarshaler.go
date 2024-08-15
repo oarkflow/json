@@ -1,4 +1,4 @@
-package unmarshaler
+package json
 
 import (
 	"encoding/json"
@@ -16,8 +16,4 @@ func init() {
 
 func SetUnmarshaler(m Unmarshaler) {
 	unmarshaler = m
-}
-
-func Instance() Unmarshaler {
-	return unmarshaler
 }

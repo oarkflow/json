@@ -20,7 +20,7 @@ func BenchmarkIs(b *testing.B) {
 		b.Run(test, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				json.Is(test)
+				json.IsValid(test)
 			}
 		})
 	}

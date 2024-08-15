@@ -2,10 +2,9 @@ package sjson
 
 import (
 	"bytes"
+	"encoding/json"
 	"sort"
 	"strconv"
-
-	"github.com/oarkflow/json/unmarshaler"
 )
 
 // PrettyOptions is Pretty options
@@ -228,7 +227,7 @@ func parsestr(s []byte) []byte {
 	for i := 1; i < len(s); i++ {
 		if s[i] == '\\' {
 			var str string
-			unmarshaler.Instance()(s, &str)
+			json.Unmarshal(s, &str)
 			return []byte(str)
 		}
 		if s[i] == '"' {

@@ -1,4 +1,4 @@
-package encoder
+package json
 
 import (
 	"encoding/json"
@@ -9,9 +9,9 @@ type IEncoder interface {
 	Encode(any) error
 }
 
-type Factory func(io.Writer) IEncoder
+type EncoderFactory func(io.Writer) IEncoder
 
-var encoderFactory Factory
+var encoderFactory EncoderFactory
 
 // Initialize the package with the standard library's JSON encoder by default.
 func init() {
@@ -21,15 +21,11 @@ func init() {
 }
 
 // SetEncoder allows you to set a custom encoder factory.
-func SetEncoder(factory Factory) {
+func SetEncoder(factory EncoderFactory) {
 	encoderFactory = factory
 }
 
 // NewEncoder creates a new encoder using the currently set encoder factory.
 func NewEncoder(w io.Writer) IEncoder {
 	return encoderFactory(w)
-}
-
-func Instance() Factory {
-	return encoderFactory
 }

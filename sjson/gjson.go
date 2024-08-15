@@ -10,6 +10,8 @@ import (
 	"unsafe"
 )
 
+var DisableEscapeHTML = false
+
 // Type is Result type
 type Type int
 
@@ -1934,6 +1936,10 @@ func AppendJSONString(dst []byte, s string) []byte {
 				dst = appendHex16(dst, uint16(s[i]))
 			}
 		} else if s[i] == '>' || s[i] == '<' || s[i] == '&' {
+			dst = append(dst, '\\', 'u')
+			dst = appendHex16(dst, uint16(s[i]))
+		} else if !DisableEscapeHTML &&
+			(s[i] == '>' || s[i] == '<' || s[i] == '&') {
 			dst = append(dst, '\\', 'u')
 			dst = appendHex16(dst, uint16(s[i]))
 		} else if s[i] == '\\' {
