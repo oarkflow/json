@@ -1,8 +1,14 @@
 package json
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/oarkflow/json/decoder"
+	"github.com/oarkflow/json/encoder"
+	"io"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/oarkflow/json/jsonschema"
@@ -13,6 +19,14 @@ import (
 
 func Marshal(data any) ([]byte, error) {
 	return marshaler.Instance()(data)
+}
+
+func NewEncoder(r io.Writer) encoder.IEncoder {
+	return encoder.NewEncoder(r)
+}
+
+func NewDecoder(r io.Reader) decoder.IDecoder {
+	return decoder.NewDecoder(r)
 }
 
 func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
@@ -93,4 +107,31 @@ func Is(s string) bool {
 	}
 
 	return sp == 0
+}
+
+var re = regexp.MustCompile(`([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:`)
+
+func Fix(input string) (string, error) {
+	if input == "" {
+		return "", fmt.Errorf("input is empty")
+	}
+	input = re.ReplaceAllString(input, `$1"$2":`)
+	input = strings.ReplaceAll(input, `'`, `"`)
+	if !strings.HasPrefix(input, "{") && strings.Contains(input, ":") && !strings.ContainsAny(input, "[]") {
+		input = "{" + input
+	}
+	if strings.Count(input, `"`)%2 != 0 {
+		input += `"`
+	}
+	switch {
+	case strings.HasPrefix(input, "{") && !strings.HasSuffix(input, "}"):
+		input += `}`
+	case strings.HasPrefix(input, "[") && !strings.HasSuffix(input, "]"):
+		input += `]`
+	}
+	var js json.RawMessage
+	if err := Unmarshal([]byte(input), &js); err != nil {
+		return "", fmt.Errorf("failed to fix JSON: %w", err)
+	}
+	return input, nil
 }
