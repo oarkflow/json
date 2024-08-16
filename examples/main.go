@@ -3,14 +3,11 @@ package main
 import (
 	json2 "encoding/json"
 	"fmt"
-	"io"
-	"runtime"
-	"strings"
-
 	"github.com/bytedance/sonic"
 	"github.com/bytedance/sonic/decoder"
 	"github.com/bytedance/sonic/encoder"
 	goccy "github.com/goccy/go-json"
+	"io"
 
 	"github.com/oarkflow/json"
 )
@@ -22,38 +19,6 @@ func main() {
 	defaultJson()
 	bytedanceSonic()
 	goccyJSON()
-}
-
-func printStackTrace() {
-	pc := make([]uintptr, 20)
-	n := runtime.Callers(2, pc)
-	frames := runtime.CallersFrames(pc[:n])
-	for {
-		frame, more := frames.Next()
-
-		// Extract package name from the function name
-		packageName := extractPackageName(frame.Function)
-
-		fmt.Printf("Function: %s\n\tPackage: %s\n\tFile: %s:%d\n", frame.Function, packageName, frame.File, frame.Line)
-
-		if !more {
-			break
-		}
-	}
-}
-
-// Helper function to extract the package name from the fully qualified function name
-func extractPackageName(function string) string {
-	// Split the function name by slashes and dots
-	parts := strings.Split(function, "/")
-	// Get the last part, which is package + function
-	if len(parts) > 0 {
-		parts = strings.Split(parts[len(parts)-1], ".")
-		if len(parts) > 1 {
-			return parts[0] // Return only the package name
-		}
-	}
-	return ""
 }
 
 func defaultJson() {
@@ -106,5 +71,4 @@ func handle() {
 	}
 	fmt.Println(d)
 	fmt.Println("Goccy JSON")
-	printStackTrace()
 }
