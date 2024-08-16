@@ -13,8 +13,8 @@ type DecoderFactory func(io.Reader) IDecoder
 
 var decoderFactory DecoderFactory
 
-// Initialize the package with the standard library's JSON encoder by default.
-func init() {
+// DefaultDecoder Initialize the package with the standard library's JSON encoder by default.
+func DefaultDecoder() {
 	decoderFactory = func(w io.Reader) IDecoder {
 		return json.NewDecoder(w)
 	}

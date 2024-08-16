@@ -10,7 +10,7 @@ var (
 	unmarshaler Unmarshaler
 )
 
-func init() {
+func DefaultUnmarshaler() {
 	unmarshaler = json.Unmarshal
 }
 

@@ -13,8 +13,8 @@ type EncoderFactory func(io.Writer) IEncoder
 
 var encoderFactory EncoderFactory
 
-// Initialize the package with the standard library's JSON encoder by default.
-func init() {
+// DefaultEncoder Initialize the package with the standard library's JSON encoder by default.
+func DefaultEncoder() {
 	encoderFactory = func(w io.Writer) IEncoder {
 		return json.NewEncoder(w)
 	}

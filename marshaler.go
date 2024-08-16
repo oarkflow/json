@@ -10,7 +10,7 @@ var (
 	marshaler Marshaler
 )
 
-func init() {
+func DefaultMarshaler() {
 	marshaler = json.Marshal
 }
 

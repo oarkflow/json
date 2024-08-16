@@ -12,6 +12,13 @@ import (
 	"github.com/oarkflow/json/sjson"
 )
 
+func init() {
+	DefaultMarshaler()
+	DefaultUnmarshaler()
+	DefaultDecoder()
+	DefaultEncoder()
+}
+
 func Marshal(data any) ([]byte, error) {
 	return marshaler(data)
 }
