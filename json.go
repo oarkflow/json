@@ -20,17 +20,17 @@ func init() {
 	DefaultEncoder()
 }
 
-// unmarshalHelper helps in unmarshalling JSON fields which may be numbers or strings
 func unmarshalHelper(data json.RawMessage, field reflect.Value) error {
 	switch field.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		// Handle integer types (including string representation)
 		var intValue int64
-		if err := json.Unmarshal(data, &intValue); err == nil {
+		if err := unmarshaler(data, &intValue); err == nil {
 			field.SetInt(intValue)
 			return nil
 		}
 		var strValue string
-		if err := json.Unmarshal(data, &strValue); err == nil {
+		if err := unmarshaler(data, &strValue); err == nil {
 			intValue, err := strconv.ParseInt(strValue, 10, 64)
 			if err != nil {
 				return err
@@ -39,13 +39,14 @@ func unmarshalHelper(data json.RawMessage, field reflect.Value) error {
 			return nil
 		}
 	case reflect.Float32, reflect.Float64:
+		// Handle float types (including string representation)
 		var floatValue float64
-		if err := json.Unmarshal(data, &floatValue); err == nil {
+		if err := unmarshaler(data, &floatValue); err == nil {
 			field.SetFloat(floatValue)
 			return nil
 		}
 		var strValue string
-		if err := json.Unmarshal(data, &strValue); err == nil {
+		if err := unmarshaler(data, &strValue); err == nil {
 			floatValue, err := strconv.ParseFloat(strValue, 64)
 			if err != nil {
 				return err
@@ -54,13 +55,14 @@ func unmarshalHelper(data json.RawMessage, field reflect.Value) error {
 			return nil
 		}
 	case reflect.Bool:
+		// Handle boolean types (including string representation)
 		var boolValue bool
-		if err := json.Unmarshal(data, &boolValue); err == nil {
+		if err := unmarshaler(data, &boolValue); err == nil {
 			field.SetBool(boolValue)
 			return nil
 		}
 		var strValue string
-		if err := json.Unmarshal(data, &strValue); err == nil {
+		if err := unmarshaler(data, &strValue); err == nil {
 			boolValue, err := strconv.ParseBool(strValue)
 			if err != nil {
 				return err
@@ -69,39 +71,101 @@ func unmarshalHelper(data json.RawMessage, field reflect.Value) error {
 			return nil
 		}
 	case reflect.String:
+		// Handle string types
 		var strValue string
-		if err := json.Unmarshal(data, &strValue); err != nil {
+		if err := unmarshaler(data, &strValue); err != nil {
 			return err
 		}
 		field.SetString(strValue)
+		return nil
+	case reflect.Slice:
+		// Handle slices (including slices of structs or maps)
+		sliceType := field.Type().Elem()
+		slice := reflect.MakeSlice(field.Type(), 0, 0)
+		var rawSlice []json.RawMessage
+		if err := unmarshaler(data, &rawSlice); err != nil {
+			return err
+		}
+		for _, rawElem := range rawSlice {
+			elem := reflect.New(sliceType).Elem()
+			if err := unmarshalHelper(rawElem, elem); err != nil {
+				return err
+			}
+			slice = reflect.Append(slice, elem)
+		}
+		field.Set(slice)
+		return nil
+	case reflect.Map:
+		// Handle maps (with string keys and any value type)
+		mapType := field.Type()
+		mapValue := reflect.MakeMap(mapType)
+		var rawMap map[string]json.RawMessage
+		if err := unmarshaler(data, &rawMap); err != nil {
+			return err
+		}
+		for key, rawElem := range rawMap {
+			elem := reflect.New(mapType.Elem()).Elem()
+			if err := unmarshalHelper(rawElem, elem); err != nil {
+				return err
+			}
+			mapValue.SetMapIndex(reflect.ValueOf(key), elem)
+		}
+		field.Set(mapValue)
+		return nil
+	case reflect.Struct:
+		// Handle structs by calling GenericUnmarshal recursively
+		structValue := reflect.New(field.Type()).Elem()
+		if err := GenericUnmarshal(data, structValue.Addr().Interface()); err != nil {
+			return err
+		}
+		field.Set(structValue)
+		return nil
+	case reflect.Interface:
+		// Handle interface{} by determining the underlying type dynamically
+		var anyValue any
+		if err := unmarshaler(data, &anyValue); err != nil {
+			return err
+		}
+
+		field.Set(reflect.ValueOf(anyValue))
 		return nil
 	}
 
 	return fmt.Errorf("unsupported type: %v", field.Kind())
 }
 
-// GenericUnmarshal is a generic unmarshal function to handle struct fields with different types
 func GenericUnmarshal(data []byte, v any) error {
+	// Unmarshal data into a map[string]json.RawMessage for flexible processing
 	var raw map[string]json.RawMessage
 	if err := unmarshaler(data, &raw); err != nil {
 		return err
 	}
-	val := reflect.ValueOf(v).Elem()
+
+	val := reflect.ValueOf(v).Elem() // Get the underlying struct
 	typ := val.Type()
+
+	// Iterate over all struct fields
 	for i := 0; i < val.NumField(); i++ {
 		field := val.Field(i)
 		fieldName := typ.Field(i).Tag.Get("json")
+
+		// Skip unexported fields or fields without a json tag
 		if fieldName == "" || fieldName == "-" {
 			continue
 		}
+
+		// Get the raw value for this field from the JSON
 		rawValue, ok := raw[fieldName]
 		if !ok {
 			continue
 		}
+
+		// Use the helper to unmarshal the field based on its type
 		if err := unmarshalHelper(rawValue, field); err != nil {
 			return fmt.Errorf("error unmarshaling field %s: %v", fieldName, err)
 		}
 	}
+
 	return nil
 }
 
@@ -110,6 +174,21 @@ func Marshal(data any) ([]byte, error) {
 }
 
 func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
+	if reflect.ValueOf(dst).Kind() != reflect.Ptr {
+		return errors.New("dst is not pointer type")
+	}
+	if len(scheme) == 0 {
+		return unmarshaler(data, dst)
+	}
+	schemeBytes := scheme[0]
+	var rs jsonschema.Schema
+	if err := unmarshaler(schemeBytes, &rs); err != nil {
+		return err
+	}
+	return rs.ValidateAndUnmarshalJSON(data, dst, unmarshaler)
+}
+
+func FixAndUnmarshal(data []byte, dst any, scheme ...[]byte) error {
 	if reflect.ValueOf(dst).Kind() != reflect.Ptr {
 		return errors.New("dst is not pointer type")
 	}
