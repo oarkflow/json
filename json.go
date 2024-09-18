@@ -134,35 +134,61 @@ func unmarshalHelper(data json.RawMessage, field reflect.Value) error {
 	return fmt.Errorf("unsupported type: %v", field.Kind())
 }
 
+// GenericUnmarshal is a generic unmarshal function to handle struct fields with different types
 func GenericUnmarshal(data []byte, v any) error {
-	// Unmarshal data into a map[string]json.RawMessage for flexible processing
-	var raw map[string]json.RawMessage
-	if err := unmarshaler(data, &raw); err != nil {
+	// Unmarshal data into an interface{} to handle different JSON structures
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	val := reflect.ValueOf(v).Elem() // Get the underlying struct
+	val := reflect.ValueOf(v).Elem()
 	typ := val.Type()
 
-	// Iterate over all struct fields
-	for i := 0; i < val.NumField(); i++ {
-		field := val.Field(i)
-		fieldName := typ.Field(i).Tag.Get("json")
+	// Check if the data is a map (object)
+	if rawMap, ok := raw.(map[string]interface{}); ok {
+		for i := 0; i < val.NumField(); i++ {
+			field := val.Field(i)
+			fieldName := typ.Field(i).Tag.Get("json")
 
-		// Skip unexported fields or fields without a json tag
-		if fieldName == "" || fieldName == "-" {
-			continue
+			// Skip unexported fields or fields without a json tag
+			if fieldName == "" || fieldName == "-" {
+				continue
+			}
+
+			// Get the raw value for this field from the JSON
+			if rawValue, exists := rawMap[fieldName]; exists {
+				rawBytes, err := json.Marshal(rawValue)
+				if err != nil {
+					return err
+				}
+				if err := unmarshalHelper(rawBytes, field); err != nil {
+					return fmt.Errorf("error unmarshaling field %s: %v", fieldName, err)
+				}
+			}
 		}
-
-		// Get the raw value for this field from the JSON
-		rawValue, ok := raw[fieldName]
-		if !ok {
-			continue
+	} else if rawArray, ok := raw.([]interface{}); ok {
+		// Handle slices separately
+		if val.Kind() == reflect.Slice {
+			sliceType := val.Type().Elem()
+			slice := reflect.MakeSlice(val.Type(), len(rawArray), len(rawArray))
+			for i, item := range rawArray {
+				itemBytes, err := json.Marshal(item)
+				if err != nil {
+					return err
+				}
+				elem := reflect.New(sliceType).Elem()
+				if err := unmarshalHelper(itemBytes, elem); err != nil {
+					return err
+				}
+				slice.Index(i).Set(elem)
+			}
+			val.Set(slice)
 		}
-
-		// Use the helper to unmarshal the field based on its type
-		if err := unmarshalHelper(rawValue, field); err != nil {
-			return fmt.Errorf("error unmarshaling field %s: %v", fieldName, err)
+	} else {
+		// Handle other types directly
+		if err := unmarshalHelper(data, val); err != nil {
+			return err
 		}
 	}
 
