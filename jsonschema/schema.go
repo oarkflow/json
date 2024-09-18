@@ -94,9 +94,9 @@ func (s *Schema) Validate(i any) error {
 	return errors.New(errsToString(c.errors))
 }
 
-func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template any, unmarshaller func([]byte, any) error) (err error) {
+func (s *Schema) ValidateAndUnmarshalJSON(data []byte, template any) (err error) {
 	var i any
-	err = unmarshaller(data, &i)
+	err = json.Unmarshal(data, &i)
 	if err != nil {
 		return err
 	}

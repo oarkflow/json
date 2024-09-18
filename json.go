@@ -211,7 +211,7 @@ func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
 	if err := unmarshaler(schemeBytes, &rs); err != nil {
 		return err
 	}
-	return rs.ValidateAndUnmarshalJSON(data, dst, unmarshaler)
+	return rs.ValidateAndUnmarshalJSON(data, dst)
 }
 
 func FixAndUnmarshal(data []byte, dst any, scheme ...[]byte) error {
@@ -226,7 +226,7 @@ func FixAndUnmarshal(data []byte, dst any, scheme ...[]byte) error {
 	if err := unmarshaler(schemeBytes, &rs); err != nil {
 		return err
 	}
-	return rs.ValidateAndUnmarshalJSON(data, dst, GenericUnmarshal)
+	return rs.ValidateAndUnmarshalJSON(data, dst)
 }
 
 func Validate(data []byte, scheme []byte) error {
