@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 	"unsafe"
 )
 
@@ -151,49 +152,53 @@ func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
 		v.Set(newV)
 		return nil
 	case reflect.Struct:
-		t := v.Type()
-
-		vmap, ok := in.(map[string]any)
-		if !ok {
-			return fmt.Errorf("type of %s should be object", path)
-		}
-		for i := 0; i < t.NumField(); i++ {
-			fieldT := t.Field(i)
-			name := fieldT.Tag.Get("json")
-			inline := false
-			IndexRange(name, ',', func(idx int, s string) bool {
-				if idx == 0 {
-					name = s
-				} else {
-					switch s {
-					case "inline":
-						inline = true
+		switch in := in.(type) {
+		case time.Time:
+			v.Set(reflect.ValueOf(in))
+		default:
+			t := v.Type()
+			vmap, ok := in.(map[string]any)
+			if !ok {
+				return fmt.Errorf("type of %s should be object", path)
+			}
+			for i := 0; i < t.NumField(); i++ {
+				fieldT := t.Field(i)
+				name := fieldT.Tag.Get("json")
+				inline := false
+				IndexRange(name, ',', func(idx int, s string) bool {
+					if idx == 0 {
+						name = s
+					} else {
+						switch s {
+						case "inline":
+							inline = true
+						}
 					}
+
+					return true
+				})
+				if name == "" {
+					name = fieldT.Name
+				}
+				if fieldT.Anonymous && inline {
+					err := unmarshalObject2Struct(name, in, v.Field(i))
+					if err != nil {
+						return err
+					}
+					continue
 				}
 
-				return true
-			})
-			if name == "" {
-				name = fieldT.Name
-			}
-			if fieldT.Anonymous && inline {
-				err := unmarshalObject2Struct(name, in, v.Field(i))
+				elemV := vmap[name]
+				if elemV == nil {
+					continue
+				}
+
+				err := unmarshalObject2Struct(name, elemV, v.Field(i))
 				if err != nil {
 					return err
 				}
-				continue
-			}
 
-			elemV := vmap[name]
-			if elemV == nil {
-				continue
 			}
-
-			err := unmarshalObject2Struct(name, elemV, v.Field(i))
-			if err != nil {
-				return err
-			}
-
 		}
 		return nil
 	case reflect.Interface:

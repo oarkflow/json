@@ -180,7 +180,6 @@ func NewProp(i any, path string) (Validator, error) {
 		} else {
 			vad, err = funcs[key](val, path, arr)
 		}
-
 		if err != nil {
 			return nil, fmt.Errorf("create prop error:key=%s,err=%w", key, err)
 		}

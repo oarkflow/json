@@ -28,8 +28,8 @@ type Config struct {
 
 func main() {
 	// JSON where power is an int and level is a string
-	jsonData1 := `[{"charset":"utf8mb4","database":"clear_dev","driver":"postgresql","host":"127.0.0.1","key":"clear","name":"clear","options":{},"password":"postgres","port":5432,"ssl_mode":"disable","timezone":"UTC","username":"postgres"},{"charset":"utf8mb4","database":"eamitest","driver":"mysql","host":"127.0.0.1","key":"mirth","name":"mirth","options":{},"password":"root","port":3306,"ssl_mode":"disable","timezone":"UTC","username":"root"},{"charset":"utf8mb4","database":"clear20_dev","driver":"postgresql","host":"127.0.0.1","key":"cleardb","name":"CleardB","options":{},"password":"postgres","port":"5432","ssl_mode":"disable","timezone":"UTC","username":"postgres"}]`
-	jsonData2 := `{"charset":"utf8mb4","database":"clear_dev","driver":"postgresql","host":"127.0.0.1","key":"clear","name":"clear","options":{},"password":"postgres","port":5432,"ssl_mode":"disable","timezone":"UTC","username":"postgres"}`
+	jsonData1 := `[{"charset":"utf8mb4","database":"clear_dev","driver":"postgresql","host":"127.0.0.1","key":"clear","name":"clear","options":{},"password":"postgres","port":"5432","ssl_mode":"disable","timezone":"UTC","username":"postgres"},{"charset":"utf8mb4","database":"eamitest","driver":"mysql","host":"127.0.0.1","key":"mirth","name":"mirth","options":{},"password":"root","port":3306,"ssl_mode":"disable","timezone":"UTC","username":"root"},{"charset":"utf8mb4","database":"clear20_dev","driver":"postgresql","host":"127.0.0.1","key":"cleardb","name":"CleardB","options":{},"password":"postgres","port":"5432","ssl_mode":"disable","timezone":"UTC","username":"postgres"}]`
+	jsonData2 := `{"charset":"utf8mb4","database":"clear_dev","driver":"postgresql","host":"127.0.0.1","key":"clear","name":"clear","options":{},"password":"postgres","port":"5432","ssl_mode":"disable","timezone":"UTC","username":"postgres"}`
 
 	var opts1 []Config
 
