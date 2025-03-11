@@ -7,6 +7,8 @@ import (
 
 type IEncoder interface {
 	Encode(any) error
+	SetIndent(prefix, indent string)
+	SetEscapeHTML(on bool)
 }
 
 type EncoderFactory func(io.Writer) IEncoder

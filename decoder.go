@@ -9,6 +9,9 @@ type IDecoder interface {
 	Decode(any) error
 	Token() (json.Token, error)
 	More() bool
+	UseNumber()
+	Buffered() io.Reader
+	DisallowUnknownFields()
 }
 
 type DecoderFactory func(io.Reader) IDecoder
