@@ -7,6 +7,8 @@ import (
 
 type IDecoder interface {
 	Decode(any) error
+	Token() (json.Token, error)
+	More() bool
 }
 
 type DecoderFactory func(io.Reader) IDecoder
