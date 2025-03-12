@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"time"
 	"unsafe"
+
+	"github.com/oarkflow/date"
 )
 
 func UnmarshalFromMap(in any, template any) error {
@@ -127,6 +129,7 @@ func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
 	case reflect.Map:
 		vmap, ok := in.(map[string]any)
 		if !ok {
+			panic(1)
 			return fmt.Errorf("type of %s should be object", path)
 		}
 		t := v.Type()
@@ -155,6 +158,15 @@ func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
 		switch in := in.(type) {
 		case time.Time:
 			v.Set(reflect.ValueOf(in))
+		case string:
+			t := v.Type()
+			if t == reflect.TypeOf(time.Time{}) {
+				vt, err := date.Parse(in)
+				if err != nil {
+					return err
+				}
+				v.Set(reflect.ValueOf(vt))
+			}
 		default:
 			t := v.Type()
 			vmap, ok := in.(map[string]any)

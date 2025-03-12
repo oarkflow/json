@@ -6,4 +6,7 @@ replace github.com/oarkflow/json => ../
 
 require github.com/oarkflow/json v0.0.0-00010101000000-000000000000
 
-require github.com/oarkflow/expr v0.0.10 // indirect
+require (
+	github.com/oarkflow/date v0.0.4 // indirect
+	github.com/oarkflow/expr v0.0.11 // indirect
+)
