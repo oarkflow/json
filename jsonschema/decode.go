@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -121,39 +122,57 @@ func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
 		v.Set(slice)
 		return nil
 	case reflect.String:
-		vv, ok := in.(string)
-		if !ok {
-			return fmt.Errorf("type of %s should be string", path)
-		}
-		v.SetString(vv)
+		v.SetString(fmt.Sprintf("%v", in))
 	case reflect.Map:
-		vmap, ok := in.(map[string]any)
-		if !ok {
-			panic(1)
-			return fmt.Errorf("type of %s should be object", path)
+		inVal := reflect.ValueOf(in)
+		if inVal.Kind() != reflect.Map {
+			return fmt.Errorf("expected input to be a map, got %s", inVal.Kind())
 		}
-		t := v.Type()
-		elemT := t.Elem()
-		newV := v
+
+		targetType := v.Type()
+		elemType := targetType.Elem()
+		keyType := targetType.Key()
+
+		// Create new map if v is nil.
+		newMap := v
 		if v.IsNil() {
-			newV = reflect.MakeMap(v.Type())
+			newMap = reflect.MakeMap(targetType)
 		}
-		keyT := t.Key()
-		if keyT.Kind() != reflect.String {
-			panic("key type should be string, but is :" + keyT.String())
-		}
-		for key, val := range vmap {
-			elemV := reflect.New(elemT)
-			err := unmarshalObject2Struct(key, val, elemV)
-			if err != nil {
+
+		for _, keyVal := range inVal.MapKeys() {
+			inputElem := inVal.MapIndex(keyVal)
+
+			// Prepare a new element for unmarshalling.
+			elemPtr := reflect.New(elemType)
+			// Pass a string representation of the key for error context.
+			if err := unmarshalObject2Struct(fmt.Sprintf("%v", keyVal.Interface()), inputElem.Interface(), elemPtr); err != nil {
 				return err
 			}
-			kv := reflect.New(keyT).Elem()
-			kv.SetString(key)
-			newV.SetMapIndex(kv, elemV.Elem())
+
+			var newKey reflect.Value
+			// Special handling: if the input key is a string and the target key is an int.
+			if keyVal.Type() == reflect.TypeOf("") && keyType.Kind() == reflect.Int {
+				parsed, err := strconv.Atoi(keyVal.String())
+				if err != nil {
+					return fmt.Errorf("failed to convert key %v to int: %v", keyVal.Interface(), err)
+				}
+				newKey = reflect.ValueOf(parsed)
+			} else if keyVal.Type() != keyType {
+				if keyVal.Type().ConvertibleTo(keyType) {
+					newKey = keyVal.Convert(keyType)
+				} else {
+					return fmt.Errorf("cannot convert key type %s to %s", keyVal.Type(), keyType)
+				}
+			} else {
+				newKey = keyVal
+			}
+
+			newMap.SetMapIndex(newKey, elemPtr.Elem())
 		}
-		v.Set(newV)
+
+		v.Set(newMap)
 		return nil
+
 	case reflect.Struct:
 		switch in := in.(type) {
 		case time.Time:

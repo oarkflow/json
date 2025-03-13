@@ -8,11 +8,12 @@ import (
 )
 
 type User struct {
-	UserID    int       `json:"user_id"`
-	CreatedAt time.Time `json:"created_at"`
+	UserID     string            `json:"user_id"`
+	Activities map[string]string `json:"activities"`
+	CreatedAt  time.Time         `json:"created_at"`
 }
 
-var data = []byte(`{"user_id": 1, "created_at":"2025-03-12"}`)
+var data = []byte(`{"user_id": 1}`)
 var schemeBytes = []byte(`{
     "type": "object",
     "description": "users",
@@ -21,6 +22,10 @@ var schemeBytes = []byte(`{
         "created_at": {
             "type": ["object", "string"],
             "default": "now()"
+        },
+        "activities": {
+            "type": ["object"],
+            "default": "{'inactive':0}"
         },
         "user_id": {
             "type": [
@@ -34,7 +39,7 @@ var schemeBytes = []byte(`{
 
 func main() {
 	var d User
-	err := json.Unmarshal(data, &d, schemeBytes)
+	err := json.FixAndUnmarshal(data, &d, schemeBytes)
 	if err != nil {
 		fmt.Println(err)
 	}
