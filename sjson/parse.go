@@ -5,11 +5,12 @@ package sjson
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/goccy/go-reflect"
 )
 
 // ParseJSONFromString s contain json string embedded in, get partial value by specified key

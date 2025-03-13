@@ -3,9 +3,10 @@ package jsonschema
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-reflect"
 )
 
 const (

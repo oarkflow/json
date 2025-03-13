@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
+
+	"github.com/goccy/go-reflect"
 )
 
 type Schema struct {

@@ -2,9 +2,10 @@ package jsonschema
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-reflect"
 )
 
 var (

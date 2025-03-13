@@ -2,9 +2,10 @@ package jsonschema
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strconv"
+
+	"github.com/goccy/go-reflect"
 
 	"github.com/oarkflow/json/sjson"
 )

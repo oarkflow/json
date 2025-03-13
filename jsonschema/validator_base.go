@@ -3,9 +3,10 @@ package jsonschema
 import (
 	"encoding/base64"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-reflect"
 )
 
 type _type byte

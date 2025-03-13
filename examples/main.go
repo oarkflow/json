@@ -13,7 +13,7 @@ type User struct {
 	CreatedAt  time.Time         `json:"created_at"`
 }
 
-var data = []byte(`{"user_id": 1}`)
+var data = []byte(`{"user_id": 1,"created_at":"2025-01-01"}`)
 var schemeBytes = []byte(`{
     "type": "object",
     "description": "users",
@@ -38,10 +38,12 @@ var schemeBytes = []byte(`{
 }`)
 
 func main() {
+	start := time.Now()
 	var d User
 	err := json.FixAndUnmarshal(data, &d, schemeBytes)
 	if err != nil {
 		fmt.Println(err)
 	}
 	fmt.Println(d)
+	fmt.Println(time.Since(start))
 }

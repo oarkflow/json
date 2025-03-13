@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-reflect"
 
 	"github.com/oarkflow/json/jsonschema"
 	"github.com/oarkflow/json/sjson"
