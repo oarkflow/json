@@ -1,297 +1,464 @@
 package jsonschema
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/oarkflow/date"
 )
 
+type unmarshalFunc func(path string, in any, v reflect.Value) error
+
+var unmarshalFuncCache sync.Map
+
+var jsonUnmarshalType = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+
 func UnmarshalFromMap(in any, template any) error {
 	v := reflect.ValueOf(template)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
-		panic("template value is nil or not pointer")
+		panic("template value is nil or not a pointer")
 	}
-	return unmarshalObject2Struct("", in, v)
+	uf := getUnmarshalFunc(v.Type())
+	return uf("", in, v)
 }
 
-var (
-	bytesType         = reflect.TypeOf([]byte(nil))
-	jsonUnmarshalType = reflect.TypeOf(json.Unmarshaler(nil))
-)
+func getUnmarshalFunc(t reflect.Type) unmarshalFunc {
 
-func checkCustomUnmarshal(in any, v reflect.Value) (bool, error) {
-	jum, ok := v.Interface().(json.Unmarshaler)
-	if !ok {
-		return false, nil
-	}
-	bytes, err := json.Marshal(in)
-	if err != nil {
-		return true, err
-	}
-	err = jum.UnmarshalJSON(bytes)
-	if err != nil {
-		return true, err
-	}
-	return true, nil
-}
-
-func unmarshalObject2Struct(path string, in any, v reflect.Value) error {
-	if in == nil {
-		return nil
-	}
-	if v.Kind() != reflect.Ptr && !v.CanSet() {
-		return nil
+	if t == reflect.TypeOf(time.Duration(0)) {
+		return buildDurationUnmarshalFunc(t)
 	}
 
-	switch {
-	case bytesType == v.Type():
-		switch inv := in.(type) {
-		case []byte:
-			v.Set(reflect.ValueOf(in))
-			return nil
-		case string:
-			bytes, err := base64.StdEncoding.DecodeString(inv)
-			if err != nil {
-				return fmt.Errorf("%s  type is not []byte , cannot decode as base64 string :%v", path, err)
-			}
-			v.Set(reflect.ValueOf(bytes))
-			return nil
-		default:
-			return fmt.Errorf("%s type is not []byte", path)
-		}
-
+	if t == reflect.TypeOf(big.Int{}) {
+		return buildBigIntUnmarshalFunc(t)
+	}
+	if t == reflect.TypeOf(big.Float{}) {
+		return buildBigFloatUnmarshalFunc(t)
 	}
 
-	switch v.Kind() {
+	if f, ok := unmarshalFuncCache.Load(t); ok {
+		return f.(unmarshalFunc)
+	}
+
+	var f unmarshalFunc
+	switch t.Kind() {
 	case reflect.Ptr:
-		if v.IsNil() {
-			vt := v.Type()
-			elemType := vt.Elem()
-			var nv reflect.Value
-			switch elemType.Kind() {
-			default:
-				nv = reflect.New(elemType)
-			}
-			ok, err := checkCustomUnmarshal(in, nv)
-			if ok {
+		f = buildPtrUnmarshalFunc(t)
+	case reflect.Interface:
+		f = buildInterfaceUnmarshalFunc(t)
+	case reflect.Struct:
+		f = buildStructUnmarshalFunc(t)
+	case reflect.Slice:
+		f = buildSliceUnmarshalFunc(t)
+	case reflect.Map:
+		f = buildMapUnmarshalFunc(t)
+	case reflect.String:
+		f = buildStringUnmarshalFunc(t)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		f = buildIntUnmarshalFunc(t)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		f = buildUintUnmarshalFunc(t)
+	case reflect.Float32, reflect.Float64:
+		f = buildFloatUnmarshalFunc(t)
+	case reflect.Bool:
+		f = buildBoolUnmarshalFunc(t)
+	case reflect.Array:
+		f = buildArrayUnmarshalFunc(t)
+	case reflect.Complex64, reflect.Complex128:
+		f = buildComplexUnmarshalFunc(t)
+	case reflect.Chan:
+
+		f = func(path string, in any, v reflect.Value) error {
+			return fmt.Errorf("unmarshalling into channel types is not supported")
+		}
+	default:
+
+		if t.Implements(jsonUnmarshalType) || reflect.PtrTo(t).Implements(jsonUnmarshalType) {
+			f = buildCustomUnmarshalFunc(t)
+		} else {
+
+			f = func(path string, in any, v reflect.Value) error {
+				bytes, err := json.Marshal(in)
 				if err != nil {
 					return err
 				}
+				return json.Unmarshal(bytes, v.Addr().Interface())
+			}
+		}
+	}
+	unmarshalFuncCache.Store(t, f)
+	return f
+}
+
+func buildPtrUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	elemType := t.Elem()
+	elemFunc := getUnmarshalFunc(elemType)
+	return func(path string, in any, v reflect.Value) error {
+		if v.IsNil() {
+			newVal := reflect.New(elemType)
+			if err := elemFunc(path, in, newVal.Elem()); err != nil {
+				return err
+			}
+			v.Set(newVal)
+			return nil
+		}
+		return elemFunc(path, in, v.Elem())
+	}
+}
+
+func buildInterfaceUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		if in == nil {
+			v.Set(reflect.Zero(t))
+			return nil
+		}
+		val := reflect.ValueOf(in)
+		if val.Type().AssignableTo(t) {
+			v.Set(val)
+			return nil
+		}
+		bytes, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(bytes, v.Addr().Interface())
+	}
+}
+
+func buildStructUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	if t == reflect.TypeOf(time.Time{}) {
+		return func(path string, in any, v reflect.Value) error {
+			switch val := in.(type) {
+			case time.Time:
+				v.Set(reflect.ValueOf(val))
 				return nil
+			case string:
+				parsed, err := date.Parse(val)
+				if err != nil {
+					return fmt.Errorf("failed to parse time: %v", err)
+				}
+				v.Set(reflect.ValueOf(parsed))
+				return nil
+			default:
+				return fmt.Errorf("unsupported type for time.Time: %T", in)
 			}
-			err = unmarshalObject2Struct(path, in, nv.Elem())
-			if err != nil {
-				return err
-			}
-
-			v.Set(nv)
-			return nil
 		}
-
-		ok, err := checkCustomUnmarshal(in, v)
-		if ok {
-			if err != nil {
-				return err
-			}
-			return nil
-		}
-		return unmarshalObject2Struct(path, in, v.Elem())
-	case reflect.Slice:
-		arr, ok := in.([]any)
-		t := v.Type()
+	}
+	numField := t.NumField()
+	type fieldInfo struct {
+		name   string
+		index  int
+		fn     unmarshalFunc
+		inline bool
+	}
+	fields := make([]fieldInfo, 0, numField)
+	for i := 0; i < numField; i++ {
+		field := t.Field(i)
+		tag := field.Tag.Get("json")
+		name, inline := parseJSONTag(tag, field.Name)
+		fields = append(fields, fieldInfo{
+			name:   name,
+			index:  i,
+			fn:     getUnmarshalFunc(field.Type),
+			inline: inline,
+		})
+	}
+	return func(path string, in any, v reflect.Value) error {
+		m, ok := in.(map[string]any)
 		if !ok {
-			return fmt.Errorf("type of %s should be slice", path)
+			return fmt.Errorf("expected input to be map[string]any for struct %s, got %T", t, in)
 		}
+		for _, field := range fields {
 
-		elemType := t.Elem()
-		slice := reflect.MakeSlice(t, 0, len(arr))
-		for _, v := range arr {
-			elemVal := reflect.New(elemType)
-			err := unmarshalObject2Struct(path, v, elemVal)
-			if err != nil {
+			if field.inline {
+				if err := field.fn(field.name, in, v.Field(field.index)); err != nil {
+					return err
+				}
+				continue
+			}
+			if fieldValue, exists := m[field.name]; exists {
+				if err := field.fn(field.name, fieldValue, v.Field(field.index)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+}
+
+func buildSliceUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	elemType := t.Elem()
+	elemFunc := getUnmarshalFunc(elemType)
+	return func(path string, in any, v reflect.Value) error {
+		arr, ok := in.([]any)
+		if !ok {
+			return fmt.Errorf("expected input to be slice for %s, got %T", path, in)
+		}
+		slice := reflect.MakeSlice(t, len(arr), len(arr))
+		for i, item := range arr {
+			if err := elemFunc(fmt.Sprintf("%s[%d]", path, i), item, slice.Index(i)); err != nil {
 				return err
 			}
-			slice = reflect.Append(slice, elemVal.Elem())
 		}
 		v.Set(slice)
 		return nil
-	case reflect.String:
-		v.SetString(fmt.Sprintf("%v", in))
-	case reflect.Map:
-		inVal := reflect.ValueOf(in)
-		if inVal.Kind() != reflect.Map {
-			return fmt.Errorf("expected input to be a map, got %s", inVal.Kind())
+	}
+}
+
+func buildMapUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	keyType := t.Key()
+	elemType := t.Elem()
+	elemFunc := getUnmarshalFunc(elemType)
+	return func(path string, in any, v reflect.Value) error {
+		mVal := reflect.ValueOf(in)
+		if mVal.Kind() != reflect.Map {
+			return fmt.Errorf("expected input to be a map for %s, got %T", path, in)
 		}
-
-		targetType := v.Type()
-		elemType := targetType.Elem()
-		keyType := targetType.Key()
-
-		// Create new map if v is nil.
-		newMap := v
-		if v.IsNil() {
-			newMap = reflect.MakeMap(targetType)
-		}
-
-		for _, keyVal := range inVal.MapKeys() {
-			inputElem := inVal.MapIndex(keyVal)
-
-			// Prepare a new element for unmarshalling.
-			elemPtr := reflect.New(elemType)
-			// Pass a string representation of the key for error context.
-			if err := unmarshalObject2Struct(fmt.Sprintf("%v", keyVal.Interface()), inputElem.Interface(), elemPtr); err != nil {
-				return err
-			}
-
+		newMap := reflect.MakeMap(t)
+		for _, k := range mVal.MapKeys() {
+			inputElem := mVal.MapIndex(k)
 			var newKey reflect.Value
-			// Special handling: if the input key is a string and the target key is an int.
-			if keyVal.Type() == reflect.TypeOf("") && keyType.Kind() == reflect.Int {
-				parsed, err := strconv.Atoi(keyVal.String())
-				if err != nil {
-					return fmt.Errorf("failed to convert key %v to int: %v", keyVal.Interface(), err)
-				}
-				newKey = reflect.ValueOf(parsed)
-			} else if keyVal.Type() != keyType {
-				if keyVal.Type().ConvertibleTo(keyType) {
-					newKey = keyVal.Convert(keyType)
+
+			if k.Type() != keyType {
+
+				if k.Type() == reflect.TypeOf("") && keyType.Kind() == reflect.Int {
+					parsed, err := strconv.Atoi(k.String())
+					if err != nil {
+						return fmt.Errorf("failed to convert key %v to int: %v", k.Interface(), err)
+					}
+					newKey = reflect.ValueOf(parsed).Convert(keyType)
+				} else if k.Type() == reflect.TypeOf("") && keyType.Kind() == reflect.Bool {
+					b, err := strconv.ParseBool(k.String())
+					if err != nil {
+						return fmt.Errorf("failed to convert key %v to bool: %v", k.Interface(), err)
+					}
+					newKey = reflect.ValueOf(b).Convert(keyType)
+				} else if k.Type() == reflect.TypeOf("") && (keyType.Kind() == reflect.Float32 || keyType.Kind() == reflect.Float64) {
+					f, err := strconv.ParseFloat(k.String(), 64)
+					if err != nil {
+						return fmt.Errorf("failed to convert key %v to float: %v", k.Interface(), err)
+					}
+					newKey = reflect.ValueOf(f).Convert(keyType)
+				} else if k.Type().ConvertibleTo(keyType) {
+					newKey = k.Convert(keyType)
 				} else {
-					return fmt.Errorf("cannot convert key type %s to %s", keyVal.Type(), keyType)
+					return fmt.Errorf("cannot convert key type %s to %s", k.Type(), keyType)
 				}
 			} else {
-				newKey = keyVal
+				newKey = k
 			}
-
-			newMap.SetMapIndex(newKey, elemPtr.Elem())
+			elemValue := reflect.New(elemType).Elem()
+			if err := elemFunc(fmt.Sprintf("%v", newKey.Interface()), inputElem.Interface(), elemValue); err != nil {
+				return err
+			}
+			newMap.SetMapIndex(newKey, elemValue)
 		}
-
 		v.Set(newMap)
 		return nil
+	}
+}
 
-	case reflect.Struct:
-		switch in := in.(type) {
-		case time.Time:
-			v.Set(reflect.ValueOf(in))
-		case string:
-			t := v.Type()
-			if t == reflect.TypeOf(time.Time{}) {
-				vt, err := date.Parse(in)
-				if err != nil {
-					return err
-				}
-				v.Set(reflect.ValueOf(vt))
-			}
-		default:
-			t := v.Type()
-			vmap, ok := in.(map[string]any)
-			if !ok {
-				return fmt.Errorf("type of %s should be object", path)
-			}
-			for i := 0; i < t.NumField(); i++ {
-				fieldT := t.Field(i)
-				name := fieldT.Tag.Get("json")
-				inline := false
-				IndexRange(name, ',', func(idx int, s string) bool {
-					if idx == 0 {
-						name = s
-					} else {
-						switch s {
-						case "inline":
-							inline = true
-						}
-					}
-
-					return true
-				})
-				if name == "" {
-					name = fieldT.Name
-				}
-				if fieldT.Anonymous && inline {
-					err := unmarshalObject2Struct(name, in, v.Field(i))
-					if err != nil {
-						return err
-					}
-					continue
-				}
-
-				elemV := vmap[name]
-				if elemV == nil {
-					continue
-				}
-
-				err := unmarshalObject2Struct(name, elemV, v.Field(i))
-				if err != nil {
-					return err
-				}
-
-			}
-		}
+func buildStringUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		v.SetString(fmt.Sprintf("%v", in))
 		return nil
-	case reflect.Interface:
-		inVal := reflect.ValueOf(in)
-		if inVal.Type().Implements(v.Type()) {
-			v.Set(inVal)
-		}
-		return nil
-	case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int16, reflect.Int8:
-		intV, err := intValueOf(in)
+	}
+}
+
+func buildIntUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		n, err := intValueOf(in)
 		if err != nil {
 			return err
 		}
-		v.SetInt(intV)
+		v.SetInt(n)
 		return nil
-	case reflect.Bool:
-		boolV, err := boolValueOf(in)
-		if err != nil {
-			return fmt.Errorf("%s error:%w", path, err)
-		}
-		v.SetBool(boolV)
-		return nil
-	case reflect.Uint, reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8:
-		intV, err := intValueOf(in)
+	}
+}
+
+func buildUintUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		n, err := intValueOf(in)
 		if err != nil {
 			return err
 		}
-		v.SetUint(uint64(intV))
+		v.SetUint(uint64(n))
 		return nil
-	case reflect.Float64, reflect.Float32:
-		floatV, err := floatValueOf(in)
+	}
+}
+
+func buildFloatUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		f, err := floatValueOf(in)
 		if err != nil {
 			return err
 		}
-		v.SetFloat(floatV)
+		v.SetFloat(f)
 		return nil
-	case reflect.Array:
+	}
+}
+
+func buildBoolUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		b, err := boolValueOf(in)
+		if err != nil {
+			return err
+		}
+		v.SetBool(b)
+		return nil
+	}
+}
+
+func buildArrayUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	elemType := t.Elem()
+	elemFunc := getUnmarshalFunc(elemType)
+	length := t.Len()
+	return func(path string, in any, v reflect.Value) error {
 		arr, ok := in.([]any)
 		if !ok {
-			return fmt.Errorf("type of %s should be slice", path)
+			return fmt.Errorf("expected input to be slice for array %s, got %T", path, in)
 		}
+		if len(arr) != length {
+			return fmt.Errorf("expected array length %d for %s, got %d", length, path, len(arr))
+		}
+		for i := 0; i < length; i++ {
+			if err := elemFunc(fmt.Sprintf("%s[%d]", path, i), arr[i], v.Index(i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
 
-		arType := reflect.ArrayOf(v.Len(), v.Type().Elem())
-		arrv := reflect.New(arType)
-		pointer := arrv.Pointer()
-		eleSize := v.Type().Elem().Size()
-		if v.Len() < len(arr) {
-			return fmt.Errorf("length of %s is %d . but target value length is %d", path, v.Len(), len(arr))
-		}
-		for i, vv := range arr {
-			elemV := reflect.New(v.Type().Elem())
-			err := unmarshalObject2Struct(path, vv, elemV)
+func buildComplexUnmarshalFunc(t reflect.Type) unmarshalFunc {
+	bitSize := 128
+	if t.Kind() == reflect.Complex64 {
+		bitSize = 64
+	}
+	return func(path string, in any, v reflect.Value) error {
+		var c complex128
+		switch val := in.(type) {
+		case string:
+			parsed, err := strconv.ParseComplex(val, bitSize)
+			if err != nil {
+				return fmt.Errorf("failed to parse complex number: %v", err)
+			}
+			c = parsed
+		case float64:
+			c = complex(val, 0)
+		case int:
+			c = complex(float64(val), 0)
+		case map[string]any:
+			realVal, ok1 := val["real"]
+			imagVal, ok2 := val["imag"]
+			if !ok1 || !ok2 {
+				return fmt.Errorf("expected map with 'real' and 'imag' for complex number at %s", path)
+			}
+			r, err := floatValueOf(realVal)
 			if err != nil {
 				return err
 			}
-			memCopy(pointer+uintptr(i)*eleSize, elemV.Pointer(), eleSize)
+			i, err := floatValueOf(imagVal)
+			if err != nil {
+				return err
+			}
+			c = complex(r, i)
+		default:
+			return fmt.Errorf("cannot unmarshal %T into complex number", in)
 		}
-		v.Set(arrv.Elem())
-	default:
-		panic("not support :" + v.Kind().String())
+		if t.Kind() == reflect.Complex64 {
+			v.SetComplex(c)
+		} else {
+			v.SetComplex(c)
+		}
+		return nil
 	}
-	return nil
+}
+
+func buildCustomUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		var unmarshaler json.Unmarshaler
+		if v.CanAddr() {
+			unmarshaler = v.Addr().Interface().(json.Unmarshaler)
+		} else {
+			return fmt.Errorf("cannot address value for custom unmarshal at %s", path)
+		}
+		bytes, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		return unmarshaler.UnmarshalJSON(bytes)
+	}
+}
+
+func buildDurationUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		switch val := in.(type) {
+		case string:
+			d, err := time.ParseDuration(val)
+			if err != nil {
+				return fmt.Errorf("failed to parse duration: %v", err)
+			}
+			v.SetInt(int64(d))
+			return nil
+		default:
+			n, err := intValueOf(in)
+			if err != nil {
+				return err
+			}
+			v.SetInt(n)
+			return nil
+		}
+	}
+}
+
+func buildBigIntUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		var s string
+		switch val := in.(type) {
+		case string:
+			s = val
+		case json.Number:
+			s = val.String()
+		case float64:
+			s = fmt.Sprintf("%.0f", val)
+		default:
+			return fmt.Errorf("cannot unmarshal %T into big.Int", in)
+		}
+		bi := new(big.Int)
+		if _, ok := bi.SetString(s, 10); !ok {
+			return fmt.Errorf("failed to parse big.Int from %s", s)
+		}
+		v.Set(reflect.ValueOf(*bi))
+		return nil
+	}
+}
+
+func buildBigFloatUnmarshalFunc(_ reflect.Type) unmarshalFunc {
+	return func(path string, in any, v reflect.Value) error {
+		var s string
+		switch val := in.(type) {
+		case string:
+			s = val
+		case json.Number:
+			s = val.String()
+		case float64:
+			s = fmt.Sprintf("%f", val)
+		default:
+			return fmt.Errorf("cannot unmarshal %T into big.Float", in)
+		}
+		bf := new(big.Float)
+		if _, ok := bf.SetString(s); !ok {
+			return fmt.Errorf("failed to parse big.Float from %s", s)
+		}
+		v.Set(reflect.ValueOf(*bf))
+		return nil
+	}
 }
 
 func intValueOf(v any) (int64, error) {
@@ -305,34 +472,73 @@ func intValueOf(v any) (int64, error) {
 	case int32:
 		return int64(t), nil
 	case int64:
-		return int64(t), nil
+		return t, nil
+	case string:
+		return strconv.ParseInt(t, 10, 64)
 	default:
-		return 0, fmt.Errorf("type is %v ,not int ", reflect.TypeOf(v))
+		return 0, fmt.Errorf("cannot convert %T to int", v)
 	}
 }
 
 func boolValueOf(v any) (bool, error) {
-	switch v := v.(type) {
+	switch b := v.(type) {
 	case bool:
-		return v, nil
+		return b, nil
 	case int:
-		return v > 0, nil
+		return b != 0, nil
 	case float64:
-		return v > 0, nil
+		return b != 0, nil
+	case string:
+		return strconv.ParseBool(b)
 	default:
-		return false, fmt.Errorf("invalid bool value:%v", v)
+		return false, fmt.Errorf("cannot convert %T to bool", v)
 	}
 }
 
 func floatValueOf(v any) (float64, error) {
-	switch v := v.(type) {
+	switch t := v.(type) {
 	case int:
-		return float64(v), nil
+		return float64(t), nil
 	case float64:
-		return v, nil
+		return t, nil
+	case float32:
+		return float64(t), nil
+	case string:
+		return strconv.ParseFloat(t, 64)
 	default:
-		return 0, fmt.Errorf("invalid float value:%v", v)
+		return 0, fmt.Errorf("cannot convert %T to float", v)
 	}
+}
+
+func parseJSONTag(tag, defaultName string) (string, bool) {
+	if tag == "" {
+		return defaultName, false
+	}
+	parts := splitTag(tag)
+	name := parts[0]
+	if name == "" {
+		name = defaultName
+	}
+	inline := false
+	for _, p := range parts[1:] {
+		if p == "inline" {
+			inline = true
+		}
+	}
+	return name, inline
+}
+
+func splitTag(tag string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(tag); i++ {
+		if tag[i] == ',' {
+			parts = append(parts, tag[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, tag[start:])
+	return parts
 }
 
 func bytesOf(p uintptr, len uintptr) []byte {
@@ -342,27 +548,4 @@ func bytesOf(p uintptr, len uintptr) []byte {
 		Cap:  int(len),
 	}
 	return *(*[]byte)(unsafe.Pointer(h))
-}
-
-func memCopy(dst, src uintptr, len uintptr) {
-	db := bytesOf(dst, len)
-	sb := bytesOf(src, len)
-	copy(db, sb)
-}
-
-func IndexRange(s string, sep byte, f func(idx int, s string) bool) {
-	st := 0
-	idx := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			if !f(idx, s[st:i]) {
-				return
-			}
-			st = i + 1
-			idx++
-		}
-	}
-	if st <= len(s) {
-		f(idx, s[st:len(s)])
-	}
 }
