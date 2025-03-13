@@ -15,10 +15,21 @@ import (
 )
 
 func init() {
-	DefaultMarshaler()
-	DefaultUnmarshaler()
-	DefaultDecoder()
-	DefaultEncoder()
+	if marshaler == nil {
+		DefaultMarshaler()
+	}
+	if unmarshaler == nil {
+		DefaultUnmarshaler()
+	}
+	if indenter == nil {
+		DefaultIndenter()
+	}
+	if decoderFactory == nil {
+		DefaultDecoder()
+	}
+	if encoderFactory == nil {
+		DefaultEncoder()
+	}
 }
 
 type RawMessage []byte
@@ -217,6 +228,10 @@ func GenericUnmarshal(data []byte, v any) error {
 
 func Marshal(data any) ([]byte, error) {
 	return marshaler(data)
+}
+
+func MarshalIndent(v any, prefix, indent string) ([]byte, error) {
+	return indenter(v, prefix, indent)
 }
 
 func Unmarshal(data []byte, dst any, scheme ...[]byte) error {
