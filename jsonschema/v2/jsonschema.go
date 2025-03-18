@@ -240,7 +240,6 @@ func ParseJSON(data []byte) (any, error) {
 
 type SchemaType []string
 
-// UnmarshalJSON implements custom unmarshalling for SchemaType.
 func (st *SchemaType) UnmarshalJSON(data []byte) error {
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {
@@ -687,7 +686,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 					types = append(types, str)
 				}
 			}
-			// Optional: Prefer "array" if available.
+
 			for _, typ := range types {
 				if typ == "array" {
 					schema.Type = SchemaType{typ}
@@ -1072,25 +1071,29 @@ func (s *Schema) findDynamicAnchor(anchor string) *Schema {
 	return nil
 }
 
-func prepareData(data any) (any, error) {
-	switch data.(type) {
-	case map[string]any, []map[string]any, []any, string, float64, bool, nil:
+func (s *Schema) prepareData(data any) (any, error) {
+	switch data := data.(type) {
+	case map[string]any, []map[string]any, []any, float64, bool, nil:
 		return data, nil
+	case string:
+		t, err := date.Parse(data)
+		if err != nil {
+			return data, nil
+		}
+		return t, nil
 	default:
 		b, err := json.Marshal(data)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var v any
+			err = json.Unmarshal(b, &v)
+			if err == nil {
+				return v, nil
+			}
 		}
-		var v any
-		err = json.Unmarshal(b, &v)
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
+		return data, nil
 	}
 }
 
-// NEW: validateAsType validates data against a single candidate type.
 func (s *Schema) validateAsType(candidate string, data any) error {
 	switch candidate {
 	case "object":
@@ -1110,24 +1113,24 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("object branch: expected object, got %T", data)
 		}
-		// ...perform remaining object validations...
+
 		return nil
 	case "array":
-		// ...existing array branch validation logic...
+
 		if _, ok := data.([]any); !ok {
 			return fmt.Errorf("expected array, got %T", data)
 		}
-		// ...other array validations...
+
 		return nil
 	case "string":
-		// ...existing string branch validation logic...
+
 		if _, ok := data.(string); !ok {
 			return fmt.Errorf("expected string, got %T", data)
 		}
-		// ...check minLength, maxLength, pattern, format...
+
 		return nil
 	case "integer":
-		// ...existing integer branch validation logic...
+
 		switch v := data.(type) {
 		case int:
 		case float64:
@@ -1141,10 +1144,10 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("expected integer, got %T", data)
 		}
-		// ...check minimum/maximum...
+
 		return nil
 	case "number":
-		// ...existing number branch validation logic...
+
 		switch data.(type) {
 		case float64, int:
 		case string:
@@ -1154,7 +1157,7 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("expected number, got %T", data)
 		}
-		// ...check constraints...
+
 		return nil
 	case "boolean":
 		if _, ok := data.(bool); !ok {
@@ -1171,20 +1174,17 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 	}
 }
 
-// UPDATED: Validate now iterates over all candidate types in Schema.Type.
 func (s *Schema) Validate(data any) error {
-	prepared, err := prepareData(data)
+	prepared, err := s.prepareData(data)
 	if err != nil {
 		return fmt.Errorf("failed to prepare data: %v", err)
 	}
 	data = prepared
-	// ...handle Boolean, $ref, dynamicRef, recursiveRef, allOf/anyOf/oneOf/not/if-then-else validations...
 
-	// Try each candidate from Schema.Type.
 	var errs []error
 	for _, candidate := range s.Type {
 		if err := s.validateAsType(candidate, data); err == nil {
-			// Succeeded in validating as candidate type.
+
 			return nil
 		} else {
 			errs = append(errs, fmt.Errorf("[%s]: %v", candidate, err))
@@ -1308,7 +1308,7 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 }
 
 func (s *Schema) Unmarshal(data any) (any, error) {
-	prepared, err := prepareData(data)
+	prepared, err := s.prepareData(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare data: %v", err)
 	}
@@ -1428,13 +1428,11 @@ func evaluateExpression(exprStr string) (any, error) {
 	return vm.Eval(nil)
 }
 
-// NEW: isExpression returns true if the string looks like an expression.
 func isExpression(s string) bool {
-	// For example, if it contains both "(" and ")" we treat it as an expression.
+
 	return strings.Contains(s, "(") && strings.Contains(s, ")")
 }
 
-// NEW: update prepareDefault to only evaluate when wrapped in "{{" and "}}"
 func prepareDefault(def any) (any, error) {
 	if def == nil {
 		return nil, nil
@@ -1443,7 +1441,7 @@ func prepareDefault(def any) (any, error) {
 	if !ok {
 		return def, nil
 	}
-	// Only evaluate if the default value is explicitly wrapped in "{{" and "}}"
+
 	if strings.HasPrefix(defStr, "{{") && strings.HasSuffix(defStr, "}}") {
 		trimmed := strings.TrimPrefix(defStr, "{{")
 		trimmed = strings.TrimSuffix(trimmed, "}}")
