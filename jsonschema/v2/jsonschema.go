@@ -1,7 +1,9 @@
 package v2
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -328,18 +331,95 @@ type Schema struct {
 
 type Compiler struct {
 	schemas map[string]*Schema
+	cache   map[string]*Schema
+	cacheMu sync.RWMutex
 }
 
 func NewCompiler() *Compiler {
-	return &Compiler{schemas: make(map[string]*Schema)}
+	return &Compiler{
+		schemas: make(map[string]*Schema),
+		cache:   make(map[string]*Schema),
+	}
 }
 
+// canonicalize returns a stable JSON encoding for v with sorted keys.
+func canonicalize(v any) (string, error) {
+	switch t := v.(type) {
+	case map[string]any:
+		var keys []string
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var parts []string
+		for _, k := range keys {
+			val, err := canonicalize(t[k])
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, fmt.Sprintf("%q:%s", k, val))
+		}
+		return "{" + strings.Join(parts, ",") + "}", nil
+	case []any:
+		var parts []string
+		for _, elem := range t {
+			val, err := canonicalize(elem)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, val)
+		}
+		return "[" + strings.Join(parts, ",") + "]", nil
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+}
+
+// computeCacheKey computes the sha256 hash of the canonicalized JSON of v.
+func computeCacheKey(v any) (string, error) {
+	canonical, err := canonicalize(v)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(h[:]), nil
+}
+
+// Modify Compiler.CompileSchema to use caching.
 func (c *Compiler) CompileSchema(data []byte) (*Schema, error) {
+	var tmp any
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return nil, err
+	}
+	key, err := computeCacheKey(tmp)
+	if err != nil {
+		return nil, err
+	}
+
+	c.cacheMu.RLock()
+	if schema, ok := c.cache[key]; ok {
+		c.cacheMu.RUnlock()
+		return schema, nil
+	}
+	c.cacheMu.RUnlock()
+
+	// Proceed with compiling the schema.
 	parsed, err := ParseJSON(data)
 	if err != nil {
 		return nil, err
 	}
-	return compileSchema(parsed, c, nil)
+	s, err := compileSchema(parsed, c, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.cacheMu.Lock()
+	c.cache[key] = s
+	c.cacheMu.Unlock()
+	return s, nil
 }
 
 var remoteCache = struct {
@@ -1180,33 +1260,37 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 	}
 }
 
-func (s *Schema) Validate(unprepared any) error {
+func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	data, err := s.prepareData(unprepared)
 	if err != nil {
-		return fmt.Errorf("failed to prepare data: %w", err)
+		return annotateError(instancePath, fmt.Errorf("failed to prepare data: %w", err))
 	}
+
 	if err := validateApplicatorKeywords(data, s); err != nil {
-		return fmt.Errorf("applicator validation error: %w", err)
+		return annotateError(instancePath, fmt.Errorf("applicator validation error: %w", err))
 	}
+
 	if s.Contains != nil {
 		if err := validateContains(data, s.Contains); err != nil {
-			return fmt.Errorf("contains validation error: %w", err)
+			return annotateError(instancePath, fmt.Errorf("contains validation error: %w", err))
 		}
 	}
 	var errs []error
 	for _, candidate := range s.Type {
 		if err := s.validateAsType(candidate, data); err == nil {
+
 			if candidate == "object" {
 				if obj, ok := data.(map[string]any); ok && s.Properties != nil {
 					evaluated := make(map[string]bool)
 					for key := range *s.Properties {
 						evaluated[key] = true
 					}
-					if err := validateUnevaluatedProperties(obj, evaluated); err != nil {
+					if err := validateUnevaluatedPropertiesAtPath(obj, evaluated, instancePath+"/object"); err != nil {
 						errs = append(errs, err)
 					}
 				}
 			}
+
 			if candidate == "array" {
 				if arr, ok := data.([]any); ok {
 					evaluatedIdx := make(map[int]bool)
@@ -1215,20 +1299,24 @@ func (s *Schema) Validate(unprepared any) error {
 							evaluatedIdx[i] = true
 						}
 					}
-					if err := validateUnevaluatedItems(arr, evaluatedIdx); err != nil {
+					if err := validateUnevaluatedItemsAtPath(arr, evaluatedIdx, instancePath+"/array"); err != nil {
 						errs = append(errs, err)
 					}
 				}
 			}
 			if len(errs) > 0 {
-				return fmt.Errorf("validation warnings: %v", errs)
+				return annotateError(instancePath, fmt.Errorf("validation warnings: %v", errs))
 			}
 			return nil
 		} else {
 			errs = append(errs, fmt.Errorf("[%s]: %v", candidate, err))
 		}
 	}
-	return fmt.Errorf("data does not match any candidate types %v. Detailed errors: %v", s.Type, errs)
+	return annotateError(instancePath, fmt.Errorf("data does not match any candidate types %v. Detailed errors: %v", s.Type, errs))
+}
+
+func (s *Schema) Validate(unprepared any) error {
+	return s.ValidateWithPath(unprepared, "/")
 }
 
 func (s *Schema) validateType(tp string, data any) (bool, any, error) {
@@ -1475,7 +1563,6 @@ func evaluateExpression(exprStr string) (any, error) {
 }
 
 func isExpression(s string) bool {
-
 	return strings.Contains(s, "(") && strings.Contains(s, ")")
 }
 
@@ -1543,32 +1630,6 @@ func checkVocabularyCompliance(schema *Schema) error {
 	return nil
 }
 
-func validateUnevaluatedProperties(instance map[string]any, evaluated map[string]bool) error {
-	var extra []string
-	for key := range instance {
-		if !evaluated[key] {
-			extra = append(extra, key)
-		}
-	}
-	if len(extra) > 0 {
-		return fmt.Errorf("unevaluated properties present: %v", extra)
-	}
-	return nil
-}
-
-func validateUnevaluatedItems(instance []any, evaluated map[int]bool) error {
-	var extra []int
-	for i := range instance {
-		if !evaluated[i] {
-			extra = append(extra, i)
-		}
-	}
-	if len(extra) > 0 {
-		return fmt.Errorf("unevaluated items at indexes: %v", extra)
-	}
-	return nil
-}
-
 func validateApplicatorKeywords(instance any, s *Schema) error {
 	var errs []string
 	for i, sub := range s.AllOf {
@@ -1630,7 +1691,7 @@ func validateApplicatorKeywords(instance any, s *Schema) error {
 func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
 	dyn, err := s.resolveDynamicRef(ref)
 	if err != nil {
-		return nil, fmt.Errorf("dynamic ref resolution failed for '%s': %w", ref, err)
+		return nil, annotateError(ref, fmt.Errorf("dynamic ref resolution failed: %w", err))
 	}
 	return dyn, nil
 }
@@ -1638,7 +1699,7 @@ func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
 func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
 	rec, err := s.resolveRecursiveRef(ref)
 	if err != nil {
-		return nil, fmt.Errorf("recursive ref resolution failed for '%s': %w", ref, err)
+		return nil, annotateError(ref, fmt.Errorf("recursive ref resolution failed: %w", err))
 	}
 	return rec, nil
 }
@@ -1697,6 +1758,36 @@ func validateContains(instance any, containsSchema *Schema) error {
 	}
 	if !found {
 		return fmt.Errorf("contains validation failed; no item matches: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func annotateError(path string, err error) error {
+	return fmt.Errorf("at %s: %w", path, err)
+}
+
+func validateUnevaluatedPropertiesAtPath(instance map[string]any, evaluated map[string]bool, path string) error {
+	var extra []string
+	for key := range instance {
+		if !evaluated[key] {
+			extra = append(extra, key)
+		}
+	}
+	if len(extra) > 0 {
+		return annotateError(path, fmt.Errorf("unevaluated properties: %v", extra))
+	}
+	return nil
+}
+
+func validateUnevaluatedItemsAtPath(instance []any, evaluated map[int]bool, path string) error {
+	var extra []int
+	for i := range instance {
+		if !evaluated[i] {
+			extra = append(extra, i)
+		}
+	}
+	if len(extra) > 0 {
+		return annotateError(path, fmt.Errorf("unevaluated items indexes: %v", extra))
 	}
 	return nil
 }

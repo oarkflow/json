@@ -35,8 +35,20 @@ var schemeBytes = []byte(`{
 
 func main() {
 	start := time.Now()
-	var d User
-	err := v2.Unmarshal(data, &d, schemeBytes)
+	compiler := v2.NewCompiler()
+	schema, err := compiler.CompileSchema(schemeBytes)
+	if err != nil {
+		panic(err)
+	}
+	d, err := schema.SmartUnmarshal(data)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(d)
+	fmt.Println(time.Since(start))
+
+	start = time.Now()
+	d, err = schema.SmartUnmarshal(data)
 	if err != nil {
 		panic(err)
 	}
