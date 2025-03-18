@@ -484,6 +484,10 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 				if b, ok := v.(bool); ok {
 					schema.Vocabulary[k] = b
 				}
+				// <-- New: Check vocabulary compliance.
+				if err := checkVocabularyCompliance(schema); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1191,7 +1195,7 @@ func (s *Schema) Validate(data any) error {
 		}
 	}
 
-	return fmt.Errorf("data does not match any candidate types: %v", errs)
+	return fmt.Errorf("data does not match any candidate types %v. Detailed errors: %v", s.Type, errs)
 }
 
 func (s *Schema) validateType(tp string, data any) (bool, any, error) {
@@ -1474,6 +1478,27 @@ func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	}
 	if err := json.Unmarshal(mergedBytes, dest); err != nil {
 		return fmt.Errorf("failed to unmarshal merged bytes into dest: %v", err)
+	}
+	return nil
+}
+
+// Add a new global map and registration function for vocabulary validators.
+var vocabularyValidators = map[string]func(schema *Schema) error{}
+
+func RegisterVocabularyValidator(name string, validator func(schema *Schema) error) {
+	vocabularyValidators[name] = validator
+}
+
+func checkVocabularyCompliance(schema *Schema) error {
+	// If schema.Vocabulary is declared, run any registered validators.
+	for vocab, enabled := range schema.Vocabulary {
+		if enabled {
+			if validator, ok := vocabularyValidators[vocab]; ok {
+				if err := validator(schema); err != nil {
+					return fmt.Errorf("vocabulary '%s' validation failed: %v", vocab, err)
+				}
+			}
+		}
 	}
 	return nil
 }
