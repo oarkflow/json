@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/oarkflow/json"
+	v2 "github.com/oarkflow/json/jsonschema/v2"
 )
 
 type User struct {
@@ -13,7 +13,7 @@ type User struct {
 	CreatedAt  time.Time         `json:"created_at"`
 }
 
-var data = []byte(`{"user_id": 1,"created_at":"2025-01-01"}`)
+var data = []byte(`{"user_id": 1}`)
 var schemeBytes = []byte(`{
     "type": "object",
     "description": "users",
@@ -40,7 +40,7 @@ var schemeBytes = []byte(`{
 func main() {
 	start := time.Now()
 	var d User
-	err := json.FixAndUnmarshal(data, &d, schemeBytes)
+	err := v2.Unmarshal(data, &d, schemeBytes)
 	if err != nil {
 		fmt.Println(err)
 	}
