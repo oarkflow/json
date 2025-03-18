@@ -13,15 +13,14 @@ type User struct {
 	CreatedAt  time.Time         `json:"created_at"`
 }
 
-var data = []byte(`{"user_id": 1}`)
+var data = []byte(`{"user_id": 1, "created_at": "2025-01-01"}`)
 var schemeBytes = []byte(`{
     "type": "object",
     "description": "users",
 	"required": ["user_id"],
     "properties": {
         "created_at": {
-            "type": ["object", "string"],
-            "default": "now()"
+            "type": ["object", "string"]
         },
         "activities": {
             "type": ["object"],
