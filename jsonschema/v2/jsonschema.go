@@ -484,7 +484,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 				if b, ok := v.(bool); ok {
 					schema.Vocabulary[k] = b
 				}
-				// <-- New: Check vocabulary compliance.
+
 				if err := checkVocabularyCompliance(schema); err != nil {
 					return nil, err
 				}
@@ -883,6 +883,9 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	if err := compileDraft2020Keywords(m, schema, compiler); err != nil {
 		return nil, err
 	}
+	if err := selfValidateSchema(schema); err != nil {
+		return nil, fmt.Errorf("schema self‑validation failed: %w", err)
+	}
 	return schema, nil
 }
 
@@ -1151,11 +1154,10 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 
 		return nil
 	case "number":
-
-		switch data.(type) {
+		switch data := data.(type) {
 		case float64, int:
 		case string:
-			if _, err := strconv.ParseFloat(data.(string), 64); err != nil {
+			if _, err := strconv.ParseFloat(data, 64); err != nil {
 				return errors.New("expected number, got non-number string")
 			}
 		default:
@@ -1178,23 +1180,54 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 	}
 }
 
-func (s *Schema) Validate(data any) error {
-	prepared, err := s.prepareData(data)
+func (s *Schema) Validate(unprepared any) error {
+	data, err := s.prepareData(unprepared)
 	if err != nil {
-		return fmt.Errorf("failed to prepare data: %v", err)
+		return fmt.Errorf("failed to prepare data: %w", err)
 	}
-	data = prepared
-
+	if err := validateApplicatorKeywords(data, s); err != nil {
+		return fmt.Errorf("applicator validation error: %w", err)
+	}
+	if s.Contains != nil {
+		if err := validateContains(data, s.Contains); err != nil {
+			return fmt.Errorf("contains validation error: %w", err)
+		}
+	}
 	var errs []error
 	for _, candidate := range s.Type {
 		if err := s.validateAsType(candidate, data); err == nil {
-
+			if candidate == "object" {
+				if obj, ok := data.(map[string]any); ok && s.Properties != nil {
+					evaluated := make(map[string]bool)
+					for key := range *s.Properties {
+						evaluated[key] = true
+					}
+					if err := validateUnevaluatedProperties(obj, evaluated); err != nil {
+						errs = append(errs, err)
+					}
+				}
+			}
+			if candidate == "array" {
+				if arr, ok := data.([]any); ok {
+					evaluatedIdx := make(map[int]bool)
+					if s.Items != nil {
+						for i := range arr {
+							evaluatedIdx[i] = true
+						}
+					}
+					if err := validateUnevaluatedItems(arr, evaluatedIdx); err != nil {
+						errs = append(errs, err)
+					}
+				}
+			}
+			if len(errs) > 0 {
+				return fmt.Errorf("validation warnings: %v", errs)
+			}
 			return nil
 		} else {
 			errs = append(errs, fmt.Errorf("[%s]: %v", candidate, err))
 		}
 	}
-
 	return fmt.Errorf("data does not match any candidate types %v. Detailed errors: %v", s.Type, errs)
 }
 
@@ -1311,12 +1344,11 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 	}
 }
 
-func (s *Schema) Unmarshal(data any) (any, error) {
-	prepared, err := s.prepareData(data)
+func (s *Schema) Unmarshal(unprepared any) (any, error) {
+	data, err := s.prepareData(unprepared)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare data: %v", err)
+		return nil, fmt.Errorf("failed to prepare data: %w", err)
 	}
-	data = prepared
 	if data == nil && s.Default != nil {
 		data = s.Default
 	}
@@ -1334,14 +1366,14 @@ func (s *Schema) Unmarshal(data any) (any, error) {
 		return refSchema.Unmarshal(data)
 	}
 	if s.DynamicRef != "" {
-		dynSchema, err := s.resolveDynamicRef(s.DynamicRef)
+		dynSchema, err := enhancedResolveDynamicRef(s, s.DynamicRef)
 		if err != nil {
 			return nil, err
 		}
 		return dynSchema.Unmarshal(data)
 	}
 	if s.RecursiveRef != "" {
-		recSchema, err := s.resolveRecursiveRef(s.RecursiveRef)
+		recSchema, err := enhancedResolveRecursiveRef(s, s.RecursiveRef)
 		if err != nil {
 			return nil, err
 		}
@@ -1350,8 +1382,18 @@ func (s *Schema) Unmarshal(data any) (any, error) {
 	if data == nil && s.Default != nil {
 		data = s.Default
 	}
-	for _, tp := range s.Type {
-		isValid, d, _ := s.validateType(tp, data)
+	if s.ContentEncoding != nil {
+		if err := validateContentEncoding(data, *s.ContentEncoding); err != nil {
+			return nil, err
+		}
+	}
+	if s.ContentMediaType != nil {
+		if err := validateContentMediaType(data, *s.ContentMediaType); err != nil {
+			return nil, err
+		}
+	}
+	for _, candidate := range s.Type {
+		isValid, d, _ := s.validateType(candidate, data)
 		if isValid {
 			return d, nil
 		}
@@ -1482,7 +1524,6 @@ func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	return nil
 }
 
-// Add a new global map and registration function for vocabulary validators.
 var vocabularyValidators = map[string]func(schema *Schema) error{}
 
 func RegisterVocabularyValidator(name string, validator func(schema *Schema) error) {
@@ -1490,7 +1531,6 @@ func RegisterVocabularyValidator(name string, validator func(schema *Schema) err
 }
 
 func checkVocabularyCompliance(schema *Schema) error {
-	// If schema.Vocabulary is declared, run any registered validators.
 	for vocab, enabled := range schema.Vocabulary {
 		if enabled {
 			if validator, ok := vocabularyValidators[vocab]; ok {
@@ -1499,6 +1539,164 @@ func checkVocabularyCompliance(schema *Schema) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateUnevaluatedProperties(instance map[string]any, evaluated map[string]bool) error {
+	var extra []string
+	for key := range instance {
+		if !evaluated[key] {
+			extra = append(extra, key)
+		}
+	}
+	if len(extra) > 0 {
+		return fmt.Errorf("unevaluated properties present: %v", extra)
+	}
+	return nil
+}
+
+func validateUnevaluatedItems(instance []any, evaluated map[int]bool) error {
+	var extra []int
+	for i := range instance {
+		if !evaluated[i] {
+			extra = append(extra, i)
+		}
+	}
+	if len(extra) > 0 {
+		return fmt.Errorf("unevaluated items at indexes: %v", extra)
+	}
+	return nil
+}
+
+func validateApplicatorKeywords(instance any, s *Schema) error {
+	var errs []string
+	for i, sub := range s.AllOf {
+		if err := sub.Validate(instance); err != nil {
+			errs = append(errs, fmt.Sprintf("allOf[%d]: %v", i, err))
+		}
+	}
+	if len(s.AnyOf) > 0 {
+		var anyValid bool
+		for i, sub := range s.AnyOf {
+			if err := sub.Validate(instance); err == nil {
+				anyValid = true
+				break
+			} else {
+				errs = append(errs, fmt.Sprintf("anyOf[%d]: %v", i, err))
+			}
+		}
+		if !anyValid {
+			errs = append(errs, "anyOf: no matching schema found")
+		}
+	}
+	if len(s.OneOf) > 0 {
+		cnt := 0
+		for i, sub := range s.OneOf {
+			if err := sub.Validate(instance); err == nil {
+				cnt++
+			} else {
+				errs = append(errs, fmt.Sprintf("oneOf[%d]: %v", i, err))
+			}
+		}
+		if cnt != 1 {
+			errs = append(errs, fmt.Sprintf("oneOf: expected exactly one match, got %d", cnt))
+		}
+	}
+	if s.Not != nil {
+		if err := s.Not.Validate(instance); err == nil {
+			errs = append(errs, "not: instance must not match the 'not' schema")
+		}
+	}
+	if s.If != nil {
+		if err := s.If.Validate(instance); err == nil {
+			if s.Then != nil {
+				if err := s.Then.Validate(instance); err != nil {
+					errs = append(errs, fmt.Sprintf("then: %v", err))
+				}
+			}
+		} else if s.Else != nil {
+			if err := s.Else.Validate(instance); err != nil {
+				errs = append(errs, fmt.Sprintf("else: %v", err))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("applicator validation errors: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
+	dyn, err := s.resolveDynamicRef(ref)
+	if err != nil {
+		return nil, fmt.Errorf("dynamic ref resolution failed for '%s': %w", ref, err)
+	}
+	return dyn, nil
+}
+
+func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
+	rec, err := s.resolveRecursiveRef(ref)
+	if err != nil {
+		return nil, fmt.Errorf("recursive ref resolution failed for '%s': %w", ref, err)
+	}
+	return rec, nil
+}
+
+func validateContentEncoding(instance any, encoding string) error {
+	if encoding == "base64" {
+		if str, ok := instance.(string); ok {
+			if _, err := base64.StdEncoding.DecodeString(str); err != nil {
+				return fmt.Errorf("contentEncoding 'base64' failed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateContentMediaType(instance any, mediaType string) error {
+	if mediaType == "application/json" {
+		if str, ok := instance.(string); ok {
+			var dummy any
+			if err := json.Unmarshal([]byte(str), &dummy); err != nil {
+				return fmt.Errorf("contentMediaType 'application/json' failed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func selfValidateSchema(schema *Schema) error {
+	if schema.Vocabulary != nil {
+
+		if enabled, ok := schema.Vocabulary["https://json-schema.org/draft/2020-12/vocab/meta-data"]; ok && enabled {
+			if schema.Title != nil && *schema.Title == "" {
+				return errors.New("meta-data: title must not be empty")
+			}
+
+		}
+	}
+	return nil
+}
+
+func validateContains(instance any, containsSchema *Schema) error {
+	arr, ok := instance.([]any)
+	if !ok {
+
+		return nil
+	}
+	var found bool
+	var errs []string
+	for i, item := range arr {
+		if err := containsSchema.Validate(item); err == nil {
+			found = true
+			break
+		} else {
+			errs = append(errs, fmt.Sprintf("contains[%d]: %v", i, err))
+		}
+	}
+	if !found {
+		return fmt.Errorf("contains validation failed; no item matches: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }
