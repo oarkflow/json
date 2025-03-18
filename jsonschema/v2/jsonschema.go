@@ -238,7 +238,31 @@ func ParseJSON(data []byte) (any, error) {
 	return parser.parseValue()
 }
 
-type SchemaType string
+type SchemaType []string
+
+// UnmarshalJSON implements custom unmarshalling for SchemaType.
+func (st *SchemaType) UnmarshalJSON(data []byte) error {
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*st = []string{single}
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*st = arr
+	return nil
+}
+
+// Helper: return the primary type (first element) if available.
+func (st SchemaType) Primary() string {
+	if len(st) > 0 {
+		return st[0]
+	}
+	return ""
+}
+
 type Rat float64
 type SchemaMap map[string]*Schema
 
@@ -661,9 +685,26 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		}
 	}
 	if t, exists := m["type"]; exists {
-		if typeStr, ok := t.(string); ok {
-			schema.Type = SchemaType(typeStr)
+		switch v := t.(type) {
+		case string:
+			schema.Type = SchemaType{v}
+		case []any:
+			var types []string
+			for _, elem := range v {
+				if str, ok := elem.(string); ok {
+					types = append(types, str)
+				}
+			}
+			// Optional: Prefer "array" if available.
+			for _, typ := range types {
+				if typ == "array" {
+					schema.Type = SchemaType{typ}
+					goto TypeDone
+				}
+			}
+			schema.Type = SchemaType(types)
 		}
+	TypeDone:
 	}
 	if enumVal, exists := m["enum"]; exists {
 		if enumArr, ok := enumVal.([]any); ok {
@@ -835,11 +876,11 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
-	if schema.Type == "" && (m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil) {
-		schema.Type = "number"
+	if schema.Type.Primary() == "" && (m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil) {
+		schema.Type = SchemaType{"number"}
 	}
-	if schema.Type == "" && schema.Properties != nil {
-		schema.Type = "object"
+	if schema.Type.Primary() == "" && schema.Properties != nil {
+		schema.Type = SchemaType{"object"}
 	}
 	if schema.ID != "" {
 		compiler.schemas[schema.ID] = schema
@@ -1145,11 +1186,23 @@ func (s *Schema) Validate(data any) error {
 			}
 		}
 	}
-	switch s.Type {
+	switch s.Type.Primary() {
 	case "object":
-		obj, ok := data.(map[string]any)
-		if !ok {
-			return errors.New("expected object")
+		var obj map[string]any
+		switch data := data.(type) {
+		case map[string]any:
+			obj = data
+		case string:
+			decodedBytes, err := base64.StdEncoding.DecodeString(data)
+			if err != nil {
+				return fmt.Errorf("expected object, got %T", data)
+			}
+			err = json.Unmarshal(decodedBytes, &obj)
+			if err != nil {
+				return fmt.Errorf("expected object, got %T", data)
+			}
+		default:
+			return fmt.Errorf("expected object, got %T", data)
 		}
 		if s.PropertyNames != nil {
 			for key := range obj {
@@ -1442,7 +1495,7 @@ func (s *Schema) Unmarshal(data any) (any, error) {
 	if data == nil && s.Default != nil {
 		data = s.Default
 	}
-	switch s.Type {
+	switch s.Type.Primary() {
 	case "object":
 		obj, ok := data.(map[string]any)
 		if !ok {
@@ -1556,7 +1609,7 @@ func (s *Schema) GenerateExample() (any, error) {
 	if s.Default != nil {
 		return s.Default, nil
 	}
-	switch s.Type {
+	switch s.Type.Primary() {
 	case "object":
 		obj := map[string]any{}
 		if s.Properties != nil {
@@ -1590,7 +1643,7 @@ func (s *Schema) GenerateExample() (any, error) {
 	case "null":
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("cannot generate example for unknown type: %s", s.Type)
+		return nil, fmt.Errorf("cannot generate example for unknown type: %s", s.Type.Primary())
 	}
 }
 

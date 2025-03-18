@@ -8,7 +8,7 @@ import (
 )
 
 type User struct {
-	UserID     string            `json:"user_id"`
+	UserID     int               `json:"user_id"`
 	Activities map[string]string `json:"activities"`
 	CreatedAt  time.Time         `json:"created_at"`
 }
@@ -25,13 +25,10 @@ var schemeBytes = []byte(`{
         },
         "activities": {
             "type": ["object"],
-            "default": "{'inactive':0}"
+            "default": {"inactive": "0"}
         },
         "user_id": {
-            "type": [
-                "integer",
-                "string"
-            ],
+            "type": ["number"],
             "maxLength": 64
         }
     }
@@ -42,7 +39,7 @@ func main() {
 	var d User
 	err := v2.Unmarshal(data, &d, schemeBytes)
 	if err != nil {
-		fmt.Println(err)
+		panic(err)
 	}
 	fmt.Println(d)
 	fmt.Println(time.Since(start))
