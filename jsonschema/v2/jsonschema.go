@@ -23,6 +23,8 @@ import (
 	"github.com/oarkflow/expr"
 )
 
+// --------------------- JSON Parser ---------------------
+
 type JSONParser struct {
 	data []byte
 	pos  int
@@ -77,7 +79,7 @@ func (p *JSONParser) parseLiteral(lit string, value any) (any, error) {
 
 func (p *JSONParser) parseObject() (any, error) {
 	obj := make(map[string]any)
-	p.pos++
+	p.pos++ // skip '{'
 	p.skipWhitespace()
 	if p.pos < len(p.data) && p.data[p.pos] == '}' {
 		p.pos++
@@ -96,7 +98,7 @@ func (p *JSONParser) parseObject() (any, error) {
 		if p.pos >= len(p.data) || p.data[p.pos] != ':' {
 			return nil, errors.New("expected ':' after key in object")
 		}
-		p.pos++
+		p.pos++ // skip ':'
 		p.skipWhitespace()
 		value, err := p.parseValue()
 		if err != nil {
@@ -119,7 +121,7 @@ func (p *JSONParser) parseObject() (any, error) {
 
 func (p *JSONParser) parseArray() (any, error) {
 	arr := []any{}
-	p.pos++
+	p.pos++ // skip '['
 	p.skipWhitespace()
 	if p.pos < len(p.data) && p.data[p.pos] == ']' {
 		p.pos++
@@ -240,6 +242,8 @@ func ParseJSON(data []byte) (any, error) {
 	parser := JSONParser{data: data, pos: 0}
 	return parser.parseValue()
 }
+
+// --------------------- Schema & Compiler ---------------------
 
 type SchemaType []string
 
@@ -389,7 +393,7 @@ func computeCacheKey(v any) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
-// Modify Compiler.CompileSchema to use caching.
+// CompileSchema compiles and caches a schema.
 func (c *Compiler) CompileSchema(data []byte) (*Schema, error) {
 	var tmp any
 	if err := json.Unmarshal(data, &tmp); err != nil {
@@ -407,7 +411,6 @@ func (c *Compiler) CompileSchema(data []byte) (*Schema, error) {
 	}
 	c.cacheMu.RUnlock()
 
-	// Proceed with compiling the schema.
 	parsed, err := ParseJSON(data)
 	if err != nil {
 		return nil, err
@@ -453,6 +456,7 @@ func compileDraft2020Keywords(m map[string]any, schema *Schema, compiler *Compil
 }
 
 func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, error) {
+	// Boolean schemas are allowed
 	if b, ok := value.(bool); ok {
 		return &Schema{
 			Boolean:  &b,
@@ -465,10 +469,12 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		return nil, errors.New("schema must be an object or boolean")
 	}
 
+	// Allow both "definitions" and "$defs"
 	if defs, exists := m["definitions"]; exists && m["$defs"] == nil {
 		m["$defs"] = defs
 	}
 
+	// Migrate "dependencies" to the new keywords if needed.
 	if dep, exists := m["dependencies"]; exists {
 		if depMap, ok := dep.(map[string]any); ok {
 			for key, val := range depMap {
@@ -564,10 +570,9 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 				if b, ok := v.(bool); ok {
 					schema.Vocabulary[k] = b
 				}
-
-				if err := checkVocabularyCompliance(schema); err != nil {
-					return nil, err
-				}
+			}
+			if err := checkVocabularyCompliance(schema); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -770,7 +775,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 					types = append(types, str)
 				}
 			}
-
+			// Prefer "array" if present
 			for _, typ := range types {
 				if typ == "array" {
 					schema.Type = SchemaType{typ}
@@ -951,9 +956,11 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
+	// If numeric keywords are present, assume number type
 	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
 		schema.Type = SchemaType{"number"}
 	}
+	// If properties are defined, force object type
 	if schema.Properties != nil {
 		schema.Type = SchemaType{"object"}
 	}
@@ -978,6 +985,8 @@ func toFloat(v any) (float64, bool) {
 	}
 	return 0, false
 }
+
+// --------------------- Format Validators ---------------------
 
 var formatValidators = map[string]func(string) error{
 	"email": func(value string) error {
@@ -1070,6 +1079,8 @@ func validateFormat(format, value string) error {
 	return nil
 }
 
+// --------------------- Schema Resolution ---------------------
+
 func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	remoteCache.RLock()
 	if cached, ok := remoteCache.schemas[ref]; ok {
@@ -1158,6 +1169,8 @@ func (s *Schema) findDynamicAnchor(anchor string) *Schema {
 	return nil
 }
 
+// --------------------- Data Preparation & Type Validation ---------------------
+
 func (s *Schema) prepareData(data any) (any, error) {
 	switch data := data.(type) {
 	case map[string]any, []map[string]any, []any, float64, bool, nil:
@@ -1200,24 +1213,18 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("object branch: expected object, got %T", data)
 		}
-
 		return nil
 	case "array":
-
 		if _, ok := data.([]any); !ok {
 			return fmt.Errorf("expected array, got %T", data)
 		}
-
 		return nil
 	case "string":
-
 		if _, ok := data.(string); !ok {
 			return fmt.Errorf("expected string, got %T", data)
 		}
-
 		return nil
 	case "integer":
-
 		switch v := data.(type) {
 		case int:
 		case float64:
@@ -1231,7 +1238,6 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("expected integer, got %T", data)
 		}
-
 		return nil
 	case "number":
 		switch data := data.(type) {
@@ -1243,7 +1249,6 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		default:
 			return fmt.Errorf("expected number, got %T", data)
 		}
-
 		return nil
 	case "boolean":
 		if _, ok := data.(bool); !ok {
@@ -1266,8 +1271,9 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 		return annotateError(instancePath, fmt.Errorf("failed to prepare data: %w", err))
 	}
 
+	// First, validate the applicator keywords
 	if err := validateApplicatorKeywords(data, s); err != nil {
-		return annotateError(instancePath, fmt.Errorf("applicator validation error: %w", err))
+		return annotateError(instancePath, err)
 	}
 
 	if s.Contains != nil {
@@ -1278,7 +1284,7 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	var errs []error
 	for _, candidate := range s.Type {
 		if err := s.validateAsType(candidate, data); err == nil {
-
+			// For object type, check unevaluated properties if a "properties" keyword exists
 			if candidate == "object" {
 				if obj, ok := data.(map[string]any); ok && s.Properties != nil {
 					evaluated := make(map[string]bool)
@@ -1290,7 +1296,7 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 					}
 				}
 			}
-
+			// For array type, check unevaluated items if an "items" keyword exists
 			if candidate == "array" {
 				if arr, ok := data.([]any); ok {
 					evaluatedIdx := make(map[int]bool)
@@ -1545,6 +1551,8 @@ func (s *Schema) GenerateExample() (any, error) {
 	}
 }
 
+// --------------------- Expression & Default ---------------------
+
 func evaluateExpression(exprStr string) (any, error) {
 	if strings.HasPrefix(exprStr, "{{") && strings.HasSuffix(exprStr, "}}") {
 		jsonStr := strings.ReplaceAll(exprStr, "'", "\"")
@@ -1558,7 +1566,6 @@ func evaluateExpression(exprStr string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return vm.Eval(nil)
 }
 
@@ -1574,7 +1581,6 @@ func prepareDefault(def any) (any, error) {
 	if !ok {
 		return def, nil
 	}
-
 	if strings.HasPrefix(defStr, "{{") && strings.HasSuffix(defStr, "}}") {
 		trimmed := strings.TrimPrefix(defStr, "{{")
 		trimmed = strings.TrimSuffix(trimmed, "}}")
@@ -1583,9 +1589,10 @@ func prepareDefault(def any) (any, error) {
 	return def, nil
 }
 
+// --------------------- Unmarshal Helper ---------------------
+
 func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	if len(schemaBytes) == 0 {
-
 		return json.Unmarshal(data, dest)
 	}
 	compiler := NewCompiler()
@@ -1611,6 +1618,8 @@ func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	return nil
 }
 
+// --------------------- Vocabulary & Other Validators ---------------------
+
 var vocabularyValidators = map[string]func(schema *Schema) error{}
 
 func RegisterVocabularyValidator(name string, validator func(schema *Schema) error) {
@@ -1632,53 +1641,62 @@ func checkVocabularyCompliance(schema *Schema) error {
 
 func validateApplicatorKeywords(instance any, s *Schema) error {
 	var errs []string
+	// allOf: every subschema must validate
 	for i, sub := range s.AllOf {
 		if err := sub.Validate(instance); err != nil {
-			errs = append(errs, fmt.Sprintf("allOf[%d]: %v", i, err))
+			errs = append(errs, fmt.Sprintf("allOf[%d] failed: %v", i, err))
 		}
 	}
+	// anyOf: at least one subschema must validate
 	if len(s.AnyOf) > 0 {
-		var anyValid bool
+		valid := false
+		var anyOfErrs []string
 		for i, sub := range s.AnyOf {
 			if err := sub.Validate(instance); err == nil {
-				anyValid = true
+				valid = true
 				break
 			} else {
-				errs = append(errs, fmt.Sprintf("anyOf[%d]: %v", i, err))
+				anyOfErrs = append(anyOfErrs, fmt.Sprintf("anyOf[%d]: %v", i, err))
 			}
 		}
-		if !anyValid {
-			errs = append(errs, "anyOf: no matching schema found")
+		if !valid {
+			errs = append(errs, fmt.Sprintf("anyOf failed: %s", strings.Join(anyOfErrs, "; ")))
 		}
 	}
+	// oneOf: exactly one subschema must validate
 	if len(s.OneOf) > 0 {
-		cnt := 0
+		validCount := 0
+		var oneOfErrs []string
 		for i, sub := range s.OneOf {
 			if err := sub.Validate(instance); err == nil {
-				cnt++
+				validCount++
 			} else {
-				errs = append(errs, fmt.Sprintf("oneOf[%d]: %v", i, err))
+				oneOfErrs = append(oneOfErrs, fmt.Sprintf("oneOf[%d]: %v", i, err))
 			}
 		}
-		if cnt != 1 {
-			errs = append(errs, fmt.Sprintf("oneOf: expected exactly one match, got %d", cnt))
+		if validCount != 1 {
+			errs = append(errs, fmt.Sprintf("oneOf failed: expected exactly one match, got %d. Details: %s", validCount, strings.Join(oneOfErrs, "; ")))
 		}
 	}
+	// not: the subschema must not validate
 	if s.Not != nil {
 		if err := s.Not.Validate(instance); err == nil {
-			errs = append(errs, "not: instance must not match the 'not' schema")
+			errs = append(errs, "not failed: instance should not match the 'not' schema")
 		}
 	}
+	// if/then/else: conditional validation
 	if s.If != nil {
 		if err := s.If.Validate(instance); err == nil {
 			if s.Then != nil {
 				if err := s.Then.Validate(instance); err != nil {
-					errs = append(errs, fmt.Sprintf("then: %v", err))
+					errs = append(errs, fmt.Sprintf("then failed: %v", err))
 				}
 			}
-		} else if s.Else != nil {
-			if err := s.Else.Validate(instance); err != nil {
-				errs = append(errs, fmt.Sprintf("else: %v", err))
+		} else {
+			if s.Else != nil {
+				if err := s.Else.Validate(instance); err != nil {
+					errs = append(errs, fmt.Sprintf("else failed: %v", err))
+				}
 			}
 		}
 	}
@@ -1686,22 +1704,6 @@ func validateApplicatorKeywords(instance any, s *Schema) error {
 		return fmt.Errorf("applicator validation errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
-	dyn, err := s.resolveDynamicRef(ref)
-	if err != nil {
-		return nil, annotateError(ref, fmt.Errorf("dynamic ref resolution failed: %w", err))
-	}
-	return dyn, nil
-}
-
-func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
-	rec, err := s.resolveRecursiveRef(ref)
-	if err != nil {
-		return nil, annotateError(ref, fmt.Errorf("recursive ref resolution failed: %w", err))
-	}
-	return rec, nil
 }
 
 func validateContentEncoding(instance any, encoding string) error {
@@ -1743,7 +1745,6 @@ func selfValidateSchema(schema *Schema) error {
 func validateContains(instance any, containsSchema *Schema) error {
 	arr, ok := instance.([]any)
 	if !ok {
-
 		return nil
 	}
 	var found bool
@@ -1790,4 +1791,131 @@ func validateUnevaluatedItemsAtPath(instance []any, evaluated map[int]bool, path
 		return annotateError(path, fmt.Errorf("unevaluated items indexes: %v", extra))
 	}
 	return nil
+}
+
+func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
+	dyn, err := s.resolveDynamicRef(ref)
+	if err != nil {
+		return nil, annotateError(ref, fmt.Errorf("dynamic ref resolution failed: %w", err))
+	}
+	return dyn, nil
+}
+
+func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
+	rec, err := s.resolveRecursiveRef(ref)
+	if err != nil {
+		return nil, annotateError(ref, fmt.Errorf("recursive ref resolution failed: %w", err))
+	}
+	return rec, nil
+}
+
+// --------------------- Main Function & Example ---------------------
+
+func main() {
+	// Sample complex JSON schema that uses allOf, anyOf, oneOf, and not keywords
+	schemaJSON := []byte(`
+{
+  "$id": "http://example.com/schema",
+  "$schema": "http://json-schema.org/draft/2020-12/schema",
+  "title": "User",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "age": { "type": "integer", "minimum": 0, "maximum": 150 },
+    "email": { "type": "string", "format": "email" },
+    "preferences": {
+      "type": "object",
+      "properties": {
+        "notifications": { "type": "boolean" },
+        "theme": { "type": "string", "enum": ["light", "dark"] }
+      },
+      "required": ["notifications", "theme"],
+      "additionalProperties": false
+    },
+    "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "created": { "type": "string", "format": "date-time" },
+        "updated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["created", "updated"],
+      "additionalProperties": false
+    },
+    "data": { "type": "string", "contentEncoding": "base64", "contentMediaType": "application/json" },
+    "status": { "type": "string", "enum": ["active", "pending", "inactive"] }
+  },
+  "required": ["name", "age", "email", "preferences", "tags", "metadata", "data", "status"],
+  "allOf": [
+    { "properties": { "age": { "maximum": 150 } } }
+  ],
+  "anyOf": [
+    { "properties": { "status": { "enum": ["active", "pending"] } } },
+    { "properties": { "tags": { "minItems": 1 } } }
+  ],
+  "oneOf": [
+    { "properties": { "data": { "pattern": "^[A-Za-z0-9+/=]+$" } } },
+    { "properties": { "email": { "format": "email" } } }
+  ],
+  "not": {
+    "properties": {
+      "name": { "pattern": "^Test" }
+    }
+  }
+}
+`)
+
+	// Sample JSON data to validate
+	dataJSON := []byte(`
+{
+    "name": "John Doe",
+    "age": 30,
+    "email": "john@example.com",
+    "preferences": {
+        "notifications": true,
+        "theme": "light"
+    },
+    "tags": [
+        "tag1",
+        "tag2"
+    ],
+    "metadata": {
+        "created": "2021-01-01T00:00:00Z",
+        "updated": "2022-01-01T00:00:00Z"
+    },
+    "data": "eyJmb28iOiJ0ZXN0IiwiYmFyIjo0Mn0=",
+    "status": "active"
+}
+`)
+
+	compiler := NewCompiler()
+	schema, err := compiler.CompileSchema(schemaJSON)
+	if err != nil {
+		fmt.Printf("Failed to compile schema: %v\n", err)
+		return
+	}
+
+	// Validate the data
+	if err := schema.Validate(dataJSON); err != nil {
+		fmt.Printf("Validation failed: %v\n", err)
+	} else {
+		fmt.Println("Validation succeeded!")
+	}
+
+	// Unmarshal the data into a map after smart unmarshal
+	var result map[string]any
+	if err := Unmarshal(dataJSON, &result, schemaJSON); err != nil {
+		fmt.Printf("Unmarshal failed: %v\n", err)
+	} else {
+		fmt.Printf("Unmarshalled data: %+v\n", result)
+	}
+
+	// Generate an example based on the schema
+	example, err := schema.GenerateExample()
+	if err != nil {
+		fmt.Printf("Failed to generate example: %v\n", err)
+	} else {
+		exampleBytes, _ := json.MarshalIndent(example, "", "  ")
+		fmt.Printf("Generated example:\n%s\n", string(exampleBytes))
+	}
 }

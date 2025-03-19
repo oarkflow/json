@@ -1,0 +1,139 @@
+{
+    "$id": "http://example.com/schema",
+    "$schema": "http://json-schema.org/draft/2020-12/schema",
+    "title": "User",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string"
+        },
+        "age": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150
+        },
+        "email": {
+            "type": "string",
+            "format": "email"
+        },
+        "preferences": {
+            "type": "object",
+            "properties": {
+                "notifications": {
+                    "type": "boolean"
+                },
+                "theme": {
+                    "type": "string",
+                    "enum": [
+                        "light",
+                        "dark"
+                    ]
+                }
+            },
+            "required": [
+                "notifications",
+                "theme"
+            ],
+            "additionalProperties": false
+        },
+        "tags": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 1
+        },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "updated": {
+                    "type": "string",
+                    "format": "date-time"
+                }
+            },
+            "required": [
+                "created",
+                "updated"
+            ],
+            "additionalProperties": false
+        },
+        "data": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "contentMediaType": "application/json"
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "active",
+                "pending",
+                "inactive"
+            ]
+        }
+    },
+    "required": [
+        "name",
+        "age",
+        "email",
+        "preferences",
+        "tags",
+        "metadata",
+        "data",
+        "status"
+    ],
+    "allOf": [
+        {
+            "properties": {
+                "age": {
+                    "maximum": 150
+                }
+            }
+        }
+    ],
+    "anyOf": [
+        {
+            "properties": {
+                "status": {
+                    "enum": [
+                        "active",
+                        "pending"
+                    ]
+                }
+            }
+        },
+        {
+            "properties": {
+                "tags": {
+                    "minItems": 1
+                }
+            }
+        }
+    ],
+    "oneOf": [
+        {
+            "properties": {
+                "data": {
+                    "pattern": "^[A-Za-z0-9+/=]+$"
+                }
+            }
+        },
+        {
+            "properties": {
+                "email": {
+                    "format": "email"
+                }
+            }
+        }
+    ],
+    "not": {
+        "properties": {
+            "name": {
+                "pattern": "^Test"
+            }
+        }
+    }
+}
