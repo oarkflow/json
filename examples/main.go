@@ -99,7 +99,7 @@ func (p *JSONParser) parseObject() (any, error) {
 		if p.pos >= len(p.data) || p.data[p.pos] != ':' {
 			return nil, errors.New("expected ':' after key in object")
 		}
-		p.pos++ // skip ':'
+		p.pos++
 		p.skipWhitespace()
 		value, err := p.parseValue()
 		if err != nil {
@@ -347,8 +347,7 @@ func NewCompiler() *Compiler {
 	}
 }
 
-// inferType inspects a schema map and, if certain keywords are present without an explicit type,
-// sets an appropriate type.
+// inferType checks for keywords that imply a type.
 func inferType(m map[string]any) {
 	if _, exists := m["pattern"]; exists {
 		if _, hasType := m["type"]; !hasType {
@@ -368,7 +367,6 @@ func inferType(m map[string]any) {
 }
 
 func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, error) {
-	// Boolean schema shortcut.
 	if b, ok := value.(bool); ok {
 		return &Schema{
 			Boolean:  &b,
@@ -412,7 +410,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		dynamicAnchors:   make(map[string]*Schema),
 	}
 
-	// Process standard keywords.
+	// Standard keywords.
 	if id, exists := m["$id"]; exists {
 		if idStr, ok := id.(string); ok {
 			schema.ID = idStr
@@ -500,7 +498,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 		}
 	}
-	// Process applicator keywords.
+	// Applicator keywords.
 	if allOf, exists := m["allOf"]; exists {
 		if arr, ok := allOf.([]any); ok {
 			for _, item := range arr {
@@ -688,7 +686,6 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 					types = append(types, str)
 				}
 			}
-			// Prefer "array" if present.
 			for _, typ := range types {
 				if typ == "array" {
 					schema.Type = SchemaType{typ}
@@ -699,7 +696,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		}
 	TypeDone:
 	}
-	// Final check: force type "string" if pattern is present but type is empty.
+	// Final check: force "string" if pattern is present and no type is set.
 	if schema.Pattern != nil && len(schema.Type) == 0 {
 		schema.Type = SchemaType{"string"}
 	}
@@ -873,11 +870,10 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
-	// If numeric keywords exist, force type "number".
+	// Force type based on keywords.
 	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
 		schema.Type = SchemaType{"number"}
 	}
-	// If properties are defined, force type "object".
 	if schema.Properties != nil {
 		schema.Type = SchemaType{"object"}
 	}
@@ -892,6 +888,11 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	}
 	return schema, nil
 }
+
+var remoteCache = struct {
+	sync.RWMutex
+	schemas map[string]*Schema
+}{schemas: make(map[string]*Schema)}
 
 func compileDraft2020Keywords(m map[string]any, schema *Schema, compiler *Compiler) error {
 	if recAnchor, exists := m["$recursiveAnchor"]; exists {
@@ -916,6 +917,52 @@ func compileDraft2020Keywords(m map[string]any, schema *Schema, compiler *Compil
 		}
 	}
 	return nil
+}
+
+func canonicalize(v any) (string, error) {
+	switch t := v.(type) {
+	case map[string]any:
+		var keys []string
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var parts []string
+		for _, k := range keys {
+			val, err := canonicalize(t[k])
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, fmt.Sprintf("%q:%s", k, val))
+		}
+		return "{" + strings.Join(parts, ",") + "}", nil
+	case []any:
+		var parts []string
+		for _, elem := range t {
+			val, err := canonicalize(elem)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, val)
+		}
+		return "[" + strings.Join(parts, ",") + "]", nil
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+}
+
+// computeCacheKey computes the sha256 hash of the canonicalized JSON of v.
+func computeCacheKey(v any) (string, error) {
+	canonical, err := canonicalize(v)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(h[:]), nil
 }
 
 func toFloat(v any) (float64, bool) {
@@ -960,8 +1007,7 @@ var formatValidators = map[string]func(string) error{
 		return nil
 	},
 	"date-time": func(value string) error {
-		_, err := date.Parse(value)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, value); err != nil {
 			return fmt.Errorf("invalid date-time: %v", err)
 		}
 		return nil
@@ -1021,11 +1067,6 @@ func validateFormat(format, value string) error {
 	return nil
 }
 
-var remoteCache = struct {
-	sync.RWMutex
-	schemas map[string]*Schema
-}{schemas: make(map[string]*Schema)}
-
 // --------------------- Schema Resolution ---------------------
 
 func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
@@ -1062,52 +1103,6 @@ func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	remoteCache.schemas[ref] = remoteSchema
 	remoteCache.Unlock()
 	return remoteSchema, nil
-}
-
-func canonicalize(v any) (string, error) {
-	switch t := v.(type) {
-	case map[string]any:
-		var keys []string
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var parts []string
-		for _, k := range keys {
-			val, err := canonicalize(t[k])
-			if err != nil {
-				return "", err
-			}
-			parts = append(parts, fmt.Sprintf("%q:%s", k, val))
-		}
-		return "{" + strings.Join(parts, ",") + "}", nil
-	case []any:
-		var parts []string
-		for _, elem := range t {
-			val, err := canonicalize(elem)
-			if err != nil {
-				return "", err
-			}
-			parts = append(parts, val)
-		}
-		return "[" + strings.Join(parts, ",") + "]", nil
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return "", err
-		}
-		return string(b), nil
-	}
-}
-
-// computeCacheKey computes the sha256 hash of the canonicalized JSON of v.
-func computeCacheKey(v any) (string, error) {
-	canonical, err := canonicalize(v)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(h[:]), nil
 }
 
 func (c *Compiler) CompileSchema(data []byte) (*Schema, error) {
@@ -1195,27 +1190,30 @@ func (s *Schema) findDynamicAnchor(anchor string) *Schema {
 
 // --------------------- Data Preparation & Type Validation ---------------------
 
+// prepareData leaves string values unchanged.
 func (s *Schema) prepareData(data any) (any, error) {
 	switch data := data.(type) {
 	case map[string]any, []map[string]any, []any, float64, bool, nil:
 		return data, nil
 	case string:
-		// Instead of converting valid date strings into time.Time, keep the original string.
-		// This avoids type mismatches in schemas expecting a string.
 		return data, nil
 	default:
 		b, err := json.Marshal(data)
-		if err == nil {
-			var v any
-			err = json.Unmarshal(b, &v)
-			if err == nil {
-				return v, nil
-			}
+		if err != nil {
+			return nil, err
 		}
-		return data, nil
+		var v any
+		err = json.Unmarshal(b, &v)
+		if err != nil {
+			return nil, err
+		}
+		return v, nil
 	}
 }
 
+// validateAsType now distinguishes the case where contentEncoding is defined.
+// For candidate "string": if contentEncoding is present, we do not decode the instance.
+// We simply validate that it is a valid base64 string (and valid JSON if contentMediaType is set).
 func (s *Schema) validateAsType(candidate string, data any) error {
 	switch candidate {
 	case "object":
@@ -1224,13 +1222,18 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		case map[string]any:
 			obj = d
 		case string:
-			decodedBytes, err := base64.StdEncoding.DecodeString(d)
-			if err != nil {
-				return fmt.Errorf("object branch: base64 decoding failed: %v", err)
-			}
-			err = json.Unmarshal(decodedBytes, &obj)
-			if err != nil {
-				return fmt.Errorf("object branch: unmarshal failed: %v", err)
+			// For objects, only decode if contentEncoding is specified.
+			if s.ContentEncoding != nil {
+				decodedBytes, err := base64.StdEncoding.DecodeString(d)
+				if err != nil {
+					return fmt.Errorf("object branch: base64 decoding failed: %v", err)
+				}
+				err = json.Unmarshal(decodedBytes, &obj)
+				if err != nil {
+					return fmt.Errorf("object branch: unmarshal failed: %v", err)
+				}
+			} else {
+				return fmt.Errorf("expected object, got string")
 			}
 		default:
 			return fmt.Errorf("object branch: expected object, got %T", data)
@@ -1242,11 +1245,32 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 		}
 		return nil
 	case "string":
+		// If contentEncoding is set, validate that the value is a valid base64 string
+		// and, if contentMediaType is "application/json", that it decodes to valid JSON.
+		if s.ContentEncoding != nil {
+			str, ok := data.(string)
+			if !ok {
+				return fmt.Errorf("expected string, got %T", data)
+			}
+			if _, err := base64.StdEncoding.DecodeString(str); err != nil {
+				return fmt.Errorf("invalid base64 encoding: %v", err)
+			}
+			if s.ContentMediaType != nil && *s.ContentMediaType == "application/json" {
+				decoded, err := base64.StdEncoding.DecodeString(str)
+				if err != nil {
+					return fmt.Errorf("base64 decode error: %v", err)
+				}
+				var tmp any
+				if err := json.Unmarshal(decoded, &tmp); err != nil {
+					return fmt.Errorf("decoded value is not valid JSON: %v", err)
+				}
+			}
+			return nil
+		}
 		switch data.(type) {
 		case string:
 			return nil
 		case time.Time:
-			// If the schema has format "date-time", then time.Time is acceptable.
 			if s.Format != nil && *s.Format == "date-time" {
 				return nil
 			}
@@ -1386,7 +1410,6 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	NextCandidate:
 	}
 	if validCandidateCount < 1 {
-
 		return fmt.Errorf("at %s: data does not match any candidate types %v. Details: %v", instancePath, s.Type, candidateErrors)
 	}
 	return nil
@@ -1398,19 +1421,53 @@ func (s *Schema) Validate(unprepared any) error {
 
 func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 	switch tp {
+	case "string":
+		if s.ContentEncoding != nil {
+			str, ok := data.(string)
+			if !ok {
+				return false, nil, fmt.Errorf("expected string, got %T", data)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(str)
+			if err != nil {
+				return false, nil, fmt.Errorf("invalid base64 encoding: %v", err)
+			}
+			if s.ContentMediaType != nil && *s.ContentMediaType == "application/json" {
+				var tmp any
+				if err := json.Unmarshal(decoded, &tmp); err != nil {
+					return false, nil, fmt.Errorf("decoded value is not valid JSON: %v", err)
+				}
+				return true, tmp, nil
+			}
+			return true, string(decoded), nil
+		}
+		switch data.(type) {
+		case string:
+			return true, data, nil
+		case time.Time:
+			if s.Format != nil && *s.Format == "date-time" {
+				return true, data, nil
+			}
+			return false, nil, fmt.Errorf("expected string, got time.Time")
+		default:
+			return false, nil, fmt.Errorf("expected string, got %T", data)
+		}
 	case "object":
 		var obj map[string]any
 		switch d := data.(type) {
 		case map[string]any:
 			obj = d
 		case string:
-			decodedBytes, err := base64.StdEncoding.DecodeString(d)
-			if err != nil {
-				return false, nil, fmt.Errorf("object branch: base64 decoding failed: %v", err)
-			}
-			err = json.Unmarshal(decodedBytes, &obj)
-			if err != nil {
-				return false, nil, fmt.Errorf("object branch: unmarshal failed: %v", err)
+			if s.ContentEncoding != nil {
+				decodedBytes, err := base64.StdEncoding.DecodeString(d)
+				if err != nil {
+					return false, nil, fmt.Errorf("object branch: base64 decoding failed: %v", err)
+				}
+				err = json.Unmarshal(decodedBytes, &obj)
+				if err != nil {
+					return false, nil, fmt.Errorf("object branch: unmarshal failed: %v", err)
+				}
+			} else {
+				return false, nil, fmt.Errorf("expected object, got string")
 			}
 		default:
 			return false, nil, fmt.Errorf("object branch: expected object, got %T", data)
@@ -1418,17 +1475,20 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 		newObj := make(map[string]any)
 		if s.Properties != nil {
 			for key, propSchema := range *s.Properties {
-				var val any
+				// Modified: only attempt to unmarshal when property exists or a default is provided.
 				if v, exists := obj[key]; exists {
-					val = v
+					merged, err := propSchema.Unmarshal(v)
+					if err != nil {
+						return false, nil, fmt.Errorf("error unmarshalling property '%s': %v", key, err)
+					}
+					newObj[key] = merged
 				} else if propSchema.Default != nil {
-					val = propSchema.Default
+					merged, err := propSchema.Unmarshal(propSchema.Default)
+					if err != nil {
+						return false, nil, fmt.Errorf("error unmarshalling property '%s' with default: %v", key, err)
+					}
+					newObj[key] = merged
 				}
-				merged, err := propSchema.Unmarshal(val)
-				if err != nil {
-					return false, nil, fmt.Errorf("error unmarshalling property '%s': %v", key, err)
-				}
-				newObj[key] = merged
 			}
 		}
 		if s.AdditionalProperties != nil {
@@ -1445,6 +1505,7 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 				newObj[key] = merged
 			}
 		} else {
+			// ...existing code...
 			for key, val := range obj {
 				if s.Properties != nil {
 					if _, exists := (*s.Properties)[key]; exists {
@@ -1748,7 +1809,6 @@ func validateApplicatorKeywords(instance any, s *Schema) error {
 		}
 	}
 	if s.Not != nil {
-		fmt.Println(s.Not, instance)
 		if err := s.Not.Validate(instance); err == nil {
 			errs = append(errs, "not failed: instance must not match the 'not' schema")
 		}
@@ -1786,12 +1846,22 @@ func validateContentEncoding(instance any, encoding string) error {
 func validateContentMediaType(instance any, mediaType string) error {
 	if mediaType == "application/json" {
 		if str, ok := instance.(string); ok {
+			// Attempt base64 decode first.
+			if decoded, err := base64.StdEncoding.DecodeString(str); err == nil {
+				var dummy any
+				if err := json.Unmarshal(decoded, &dummy); err != nil {
+					return fmt.Errorf("contentMediaType 'application/json' failed after base64 decode: %v", err)
+				}
+				return nil
+			}
+			// Fallback: try unmarshalling the string directly.
 			var dummy any
 			if err := json.Unmarshal([]byte(str), &dummy); err != nil {
 				return fmt.Errorf("contentMediaType 'application/json' failed: %v", err)
 			}
 		}
 	}
+	// ...existing code...
 	return nil
 }
 
@@ -1865,7 +1935,7 @@ func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
 // --------------------- Main Function & Example ---------------------
 
 func main() {
-	// Sample complex JSON schema.
+	// Sample schema for a User.
 	schemaJSON := []byte(`
 {
   "$id": "http://example.com/schema",
@@ -1943,6 +2013,5 @@ func main() {
 }
 
 func selfValidateSchema(schema *Schema) error {
-	// No extra self-validation for now.
 	return nil
 }
