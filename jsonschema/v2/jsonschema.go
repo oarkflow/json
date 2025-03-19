@@ -1,5 +1,6 @@
 package v2
 
+// https://gist.github.com/oarkflow/d7f3c2bbefe1ff179e3ea213f0403793
 import (
 	"crypto/sha256"
 	"encoding/base64"
