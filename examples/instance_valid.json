@@ -1,18 +1,19 @@
 {
-    "age": 52.86931012036741,
-    "data": "them",
-    "email": "sandywiegand@tromp.net",
-    "metadata": {
-        "created": "being",
-        "updated": "how"
-    },
-    "name": "whoa",
+    "name": "John Doe",
+    "age": 30,
+    "email": "john@example.com",
     "preferences": {
-        "notifications": false,
-        "theme": "tonight"
+        "notifications": true,
+        "theme": "light"
     },
-    "status": "her",
     "tags": [
-        "for"
-    ]
+        "tag1",
+        "tag2"
+    ],
+    "metadata": {
+        "created": "2021-01-01T00:00:00Z",
+        "updated": "2022-01-01T00:00:00Z"
+    },
+    "data": "eyJmb28iOiJ0ZXN0IiwiYmFyIjo0Mn0=",
+    "status": "active"
 }

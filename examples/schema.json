@@ -128,12 +128,5 @@
                 }
             }
         }
-    ],
-    "not": {
-        "properties": {
-            "name": {
-                "pattern": "^Test"
-            }
-        }
-    }
+    ]
 }
