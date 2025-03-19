@@ -7,6 +7,7 @@ import (
 )
 
 func BenchmarkIs(b *testing.B) {
+
 	tests := []string{
 		`{"name": "John", "age": 30, "city": "New York"}`,
 		`[{"name": "John"}, {"name": "Jane"}]`,

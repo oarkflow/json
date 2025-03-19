@@ -1721,40 +1721,46 @@ func checkVocabularyCompliance(schema *Schema) error {
 	return nil
 }
 
-func validateApplicatorKeywords(instance any, s *Schema) error {
+func validateSubschemas(keyword string, subschemas []*Schema, instance any) error {
 	var errs []string
-	for i, sub := range s.AllOf {
+	validCount := 0
+	for i, sub := range subschemas {
 		if err := sub.Validate(instance); err != nil {
-			errs = append(errs, fmt.Sprintf("allOf[%d] failed: %v", i, err))
+			errs = append(errs, fmt.Sprintf("%s[%d]: %v", keyword, i, err))
+		} else {
+			validCount++
 		}
 	}
-	if len(s.AnyOf) > 0 {
-		var anyValid bool
-		var anyOfErrs []string
-		for i, sub := range s.AnyOf {
-			if err := sub.Validate(instance); err == nil {
-				anyValid = true
-				break
-			} else {
-				anyOfErrs = append(anyOfErrs, fmt.Sprintf("anyOf[%d]: %v", i, err))
-			}
+	switch keyword {
+	case "allOf":
+		if len(errs) > 0 {
+			return fmt.Errorf("allOf validation errors: %s", strings.Join(errs, "; "))
 		}
-		if !anyValid {
-			errs = append(errs, fmt.Sprintf("anyOf failed: %s", strings.Join(anyOfErrs, "; ")))
+	case "anyOf":
+		if validCount < 1 {
+			return fmt.Errorf("anyOf failed: %s", strings.Join(errs, "; "))
+		}
+	case "oneOf":
+		if validCount != 1 {
+			return fmt.Errorf("oneOf failed: expected exactly 1 valid schema, got %d; details: %s", validCount, strings.Join(errs, "; "))
+		}
+	}
+	return nil
+}
+
+func validateApplicatorKeywords(instance any, s *Schema) error {
+	var errs []string
+	if err := validateSubschemas("allOf", s.AllOf, instance); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(s.AnyOf) > 0 {
+		if err := validateSubschemas("anyOf", s.AnyOf, instance); err != nil {
+			errs = append(errs, err.Error())
 		}
 	}
 	if len(s.OneOf) > 0 {
-		cnt := 0
-		var oneOfErrs []string
-		for i, sub := range s.OneOf {
-			if err := sub.Validate(instance); err == nil {
-				cnt++
-			} else {
-				oneOfErrs = append(oneOfErrs, fmt.Sprintf("oneOf[%d]: %v", i, err))
-			}
-		}
-		if cnt < 1 {
-			errs = append(errs, fmt.Sprintf("oneOf failed: expected at least one match, got %d. Details: %s", cnt, strings.Join(oneOfErrs, "; ")))
+		if err := validateSubschemas("oneOf", s.OneOf, instance); err != nil {
+			errs = append(errs, err.Error())
 		}
 	}
 	if s.Not != nil {
