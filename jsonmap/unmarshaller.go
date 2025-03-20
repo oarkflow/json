@@ -164,9 +164,18 @@ func (d *decoder) decodeString() (string, error) {
 	return "", errors.New("unterminated string")
 }
 
+// Updated decodeStringEscaped using a fixed-size stack buffer for small allocations.
 func (d *decoder) decodeStringEscaped(start int) (string, error) {
-	// Preallocate runes slice with an estimated capacity to reduce reallocations.
-	runes := make([]rune, 0, d.len-d.pos)
+	// Use a fixed-size array if the estimated capacity is small.
+	var runeStack [64]rune
+	var runes []rune
+	capEstimate := d.len - d.pos
+	if capEstimate <= 64 {
+		runes = runeStack[:0]
+	} else {
+		runes = make([]rune, 0, capEstimate)
+	}
+	// ...existing loop logic...
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
@@ -442,13 +451,26 @@ func Marshal(v any) ([]byte, error) {
 	}
 }
 
-// escapeString performs a minimal escaping of special characters.
+// Updated escapeString to use a single-pass strings.Builder loop.
 func escapeString(s string) string {
-	// In a high-performance scenario, you might pre-compute escape sequences.
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	s = strings.ReplaceAll(s, "\t", `\t`)
-	s = strings.ReplaceAll(s, "\r", `\r`)
-	return s
+	var b strings.Builder
+	b.Grow(len(s))
+	// ...replacing multiple ReplaceAll calls with a single loop...
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
