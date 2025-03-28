@@ -458,7 +458,6 @@ func assignValue(fv reflect.Value, raw any) error {
 		}
 		fv.Set(slice)
 	case reflect.Ptr:
-		// For pointer fields, allocate and assign.
 		ptrVal := reflect.New(fv.Type().Elem())
 		if err := assignValue(ptrVal.Elem(), raw); err != nil {
 			return err
@@ -479,10 +478,13 @@ func assignValue(fv reflect.Value, raw any) error {
 // Minimal JSON Marshal (Zero-Alloc for supported types)
 // ----------------------
 
+// Marshal encodes the provided value into JSON.
+// It supports basic types, maps, slices, arrays, and structs.
 func Marshal(v any) ([]byte, error) {
-	switch vv := v.(type) {
-	case nil:
+	if v == nil {
 		return []byte("null"), nil
+	}
+	switch vv := v.(type) {
 	case string:
 		return []byte(fmt.Sprintf(`"%s"`, escapeString(vv))), nil
 	case float64:
@@ -529,14 +531,32 @@ func Marshal(v any) ([]byte, error) {
 		}
 		buf.WriteByte(']')
 		return buf.Bytes(), nil
-	default:
-		// For structs, convert to map first.
-		rv := reflect.ValueOf(v)
-		if rv.Kind() == reflect.Struct {
-			m := structToMap(rv)
-			return Marshal(m)
+	}
+
+	// Fallback: use reflection to support slices, arrays, and structs.
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		var buf bytes.Buffer
+		buf.WriteByte('[')
+		for i := 0; i < rv.Len(); i++ {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			elem := rv.Index(i).Interface()
+			b, err := Marshal(elem)
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(b)
 		}
-		return nil, fmt.Errorf("unsupported type for marshal: %T", vv)
+		buf.WriteByte(']')
+		return buf.Bytes(), nil
+	case reflect.Struct:
+		m := structToMap(rv)
+		return Marshal(m)
+	default:
+		return nil, fmt.Errorf("unsupported type for marshal: %T", v)
 	}
 }
 

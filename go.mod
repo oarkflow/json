@@ -4,6 +4,7 @@ go 1.22.3
 
 require (
 	github.com/brianvoe/gofakeit/v6 v6.28.0
+	github.com/goccy/go-json v0.10.5
 	github.com/goccy/go-reflect v1.2.0
 	github.com/oarkflow/date v0.0.4
 	github.com/oarkflow/expr v0.0.11
