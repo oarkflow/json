@@ -4,11 +4,17 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 	"unsafe"
 )
+
+// ----------------------
+// Zero-Allocation Helpers
+// ----------------------
 
 // b2s converts []byte to string without extra copy.
 // (Be sure that the underlying slice is not modified.)
@@ -16,14 +22,9 @@ func b2s(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }
 
-// JSONUnmarshaler may be implemented by types that want to decode themselves.
-type JSONUnmarshaler interface {
-	UnmarshalJSONCustom([]byte) error
-}
-
-// ----------------------------------------------------------------------------
-// Custom Decoder (zero-allocation techniques used where possible)
-// ----------------------------------------------------------------------------
+// ----------------------
+// JSON Decoder (Zero-Alloc)
+// ----------------------
 
 type decoder struct {
 	data []byte
@@ -164,9 +165,7 @@ func (d *decoder) decodeString() (string, error) {
 	return "", errors.New("unterminated string")
 }
 
-// Updated decodeStringEscaped using a fixed-size stack buffer for small allocations.
 func (d *decoder) decodeStringEscaped(start int) (string, error) {
-	// Use a fixed-size array if the estimated capacity is small.
 	var runeStack [64]rune
 	var runes []rune
 	capEstimate := d.len - d.pos
@@ -175,7 +174,8 @@ func (d *decoder) decodeStringEscaped(start int) (string, error) {
 	} else {
 		runes = make([]rune, 0, capEstimate)
 	}
-	// ...existing loop logic...
+	// Append already-read bytes.
+	runes = append(runes, []rune(b2s(d.data[start:d.pos]))...)
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
@@ -261,19 +261,56 @@ func (d *decoder) decodeNull() (any, error) {
 	return nil, errors.New("invalid null literal")
 }
 
-// ----------------------------------------------------------------------------
-// Unmarshal with same signature as json.Unmarshal (without reflect for core types)
-// ----------------------------------------------------------------------------
+// ----------------------
+// Caching of Struct Field Metadata
+// ----------------------
 
-func Unmarshal(data []byte, v any) error {
-	// If v implements JSONUnmarshaler, delegate.
-	if um, ok := v.(JSONUnmarshaler); ok {
-		return um.UnmarshalJSONCustom(data)
+type fieldInfo struct {
+	index []int  // Field index chain (for nested fields)
+	name  string // JSON key name to match
+}
+
+var structCache sync.Map // map[reflect.Type][]fieldInfo
+
+func getStructFields(t reflect.Type) []fieldInfo {
+	if cached, ok := structCache.Load(t); ok {
+		return cached.([]fieldInfo)
 	}
-	d := newDecoder(data)
-	d.skipWhitespace()
+	var fields []fieldInfo
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		// Only process exported fields.
+		if field.PkgPath != "" {
+			continue
+		}
+		key := field.Name
+		if tag := field.Tag.Get("json"); tag != "" {
+			parts := strings.Split(tag, ",")
+			if parts[0] != "" {
+				key = parts[0]
+			}
+		}
+		fields = append(fields, fieldInfo{index: field.Index, name: key})
+	}
+	structCache.Store(t, fields)
+	return fields
+}
+
+// ----------------------
+// Unmarshal Implementation
+// ----------------------
+
+// Unmarshal decodes JSON data into the provided variable. It supports basic types,
+// maps, slices, and structs (using reflection and caching).
+func Unmarshal(data []byte, v any) error {
+	if v == nil {
+		return errors.New("nil target provided")
+	}
+	// Handle basic types directly.
 	switch target := v.(type) {
 	case *map[string]any:
+		d := newDecoder(data)
+		d.skipWhitespace()
 		obj, err := d.decodeObject()
 		if err != nil {
 			return err
@@ -281,6 +318,8 @@ func Unmarshal(data []byte, v any) error {
 		*target = obj
 		return nil
 	case *[]map[string]any:
+		d := newDecoder(data)
+		d.skipWhitespace()
 		arrRaw, err := d.decodeArray()
 		if err != nil {
 			return err
@@ -296,6 +335,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = out
 		return nil
 	case *string:
+		d := newDecoder(data)
 		s, err := d.decodeString()
 		if err != nil {
 			return err
@@ -303,6 +343,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = s
 		return nil
 	case *float64:
+		d := newDecoder(data)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -310,6 +351,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = n
 		return nil
 	case *int:
+		d := newDecoder(data)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -317,84 +359,127 @@ func Unmarshal(data []byte, v any) error {
 		*target = int(n)
 		return nil
 	case *bool:
+		d := newDecoder(data)
 		b, err := d.decodeBool()
 		if err != nil {
 			return err
 		}
 		*target = b
 		return nil
-	default:
-		return errors.New("unsupported type: only *map[string]any, *[]map[string]any, *string, *float64, *int, *bool or JSONUnmarshaler are supported")
 	}
+
+	// For structs, decode into a map first and then use reflection.
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return errors.New("target must be a non-nil pointer")
+	}
+	elem := rv.Elem()
+	if elem.Kind() != reflect.Struct {
+		return fmt.Errorf("unsupported type: %T", v)
+	}
+
+	d := newDecoder(data)
+	d.skipWhitespace()
+	m, err := d.decodeObject()
+	if err != nil {
+		return err
+	}
+	return decodeStruct(elem, m)
 }
 
-// ----------------------------------------------------------------------------
-// Zero Allocation Hot Path Get & Set
-//
-// The following implementations are basic examples.
-// A truly zero‐allocation solution would avoid full decoding/re‐encoding,
-// instead scanning the JSON bytes in place (as done in libraries like gjson/sjson).
-// Here we illustrate a simple approach using our custom Unmarshal/Marshal.
-// ----------------------------------------------------------------------------
-
-// Get retrieves a value from JSON bytes by a dot‑notation key path.
-// For example: Get(data, "nested.obj.inner")
-func Get(data []byte, keys ...string) (any, error) {
-	var m map[string]any
-	if err := Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	var current any = m
-	for _, k := range keys {
-		mp, ok := current.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("path %q: not an object", k)
-		}
-		val, exists := mp[k]
+// decodeStruct uses reflection (with cached metadata) to assign values from the decoded map.
+func decodeStruct(v reflect.Value, data map[string]any) error {
+	fields := getStructFields(v.Type())
+	for _, info := range fields {
+		raw, exists := data[info.name]
 		if !exists {
-			return nil, fmt.Errorf("path %q: key not found", k)
+			continue
 		}
-		current = val
+		fv := v.FieldByIndex(info.index)
+		if !fv.CanSet() {
+			continue
+		}
+		if err := assignValue(fv, raw); err != nil {
+			return fmt.Errorf("field %q: %w", info.name, err)
+		}
 	}
-	return current, nil
+	return nil
 }
 
-// Set updates a value in JSON bytes by a dot‑notation key path and returns new JSON bytes.
-// For example: Set(data, "nested.obj.inner", "newvalue")
-// Note: This implementation decodes the entire JSON, modifies the in‑memory map, and re‑encodes.
-// A truly zero‐allocation solution would modify the JSON bytes in place if possible.
-func Set(data []byte, key string, value any) ([]byte, error) {
-	var m map[string]any
-	if err := Unmarshal(data, &m); err != nil {
-		return nil, err
+// assignValue converts and assigns the raw value to the field.
+func assignValue(fv reflect.Value, raw any) error {
+	// Handle nil: assign zero value.
+	if raw == nil {
+		fv.Set(reflect.Zero(fv.Type()))
+		return nil
 	}
-	// Split key by dot.
-	parts := strings.Split(key, ".")
-	current := m
-	for i, k := range parts {
-		if i == len(parts)-1 {
-			// Set value.
-			current[k] = value
-		} else {
-			// Traverse nested object.
-			sub, ok := current[k].(map[string]any)
-			if !ok {
-				// Create new nested object if missing.
-				sub = make(map[string]any)
-				current[k] = sub
+
+	switch fv.Kind() {
+	case reflect.String:
+		s, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", raw)
+		}
+		fv.SetString(s)
+	case reflect.Float64:
+		n, ok := raw.(float64)
+		if !ok {
+			return fmt.Errorf("expected float64, got %T", raw)
+		}
+		fv.SetFloat(n)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, ok := raw.(float64)
+		if !ok {
+			return fmt.Errorf("expected number for int, got %T", raw)
+		}
+		fv.SetInt(int64(n))
+	case reflect.Bool:
+		b, ok := raw.(bool)
+		if !ok {
+			return fmt.Errorf("expected bool, got %T", raw)
+		}
+		fv.SetBool(b)
+	case reflect.Struct:
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("expected object for struct, got %T", raw)
+		}
+		return decodeStruct(fv, m)
+	case reflect.Slice:
+		arr, ok := raw.([]any)
+		if !ok {
+			return fmt.Errorf("expected array, got %T", raw)
+		}
+		slice := reflect.MakeSlice(fv.Type(), len(arr), len(arr))
+		for i := 0; i < len(arr); i++ {
+			if err := assignValue(slice.Index(i), arr[i]); err != nil {
+				return fmt.Errorf("index %d: %w", i, err)
 			}
-			current = sub
+		}
+		fv.Set(slice)
+	case reflect.Ptr:
+		// For pointer fields, allocate and assign.
+		ptrVal := reflect.New(fv.Type().Elem())
+		if err := assignValue(ptrVal.Elem(), raw); err != nil {
+			return err
+		}
+		fv.Set(ptrVal)
+	default:
+		val := reflect.ValueOf(raw)
+		if !val.IsValid() {
+			fv.Set(reflect.Zero(fv.Type()))
+		} else {
+			fv.Set(val)
 		}
 	}
-	return Marshal(m)
+	return nil
 }
 
-// ----------------------------------------------------------------------------
-// Minimal JSON Marshal (for our supported types)
-// ----------------------------------------------------------------------------
+// ----------------------
+// Minimal JSON Marshal (Zero-Alloc for supported types)
+// ----------------------
 
 func Marshal(v any) ([]byte, error) {
-	// This simple encoder supports map[string]any, []any, string, float64, bool and nil.
 	switch vv := v.(type) {
 	case nil:
 		return []byte("null"), nil
@@ -411,7 +496,6 @@ func Marshal(v any) ([]byte, error) {
 		return []byte("false"), nil
 	case map[string]any:
 		var buf bytes.Buffer
-		// Rough estimation: braces plus each key/value pair.
 		estCapacity := 2 + len(vv)*20
 		buf.Grow(estCapacity)
 		buf.WriteByte('{')
@@ -421,7 +505,6 @@ func Marshal(v any) ([]byte, error) {
 				buf.WriteByte(',')
 			}
 			first = false
-			// Write key.
 			buf.WriteString(fmt.Sprintf(`"%s":`, escapeString(k)))
 			b, err := Marshal(val)
 			if err != nil {
@@ -447,15 +530,31 @@ func Marshal(v any) ([]byte, error) {
 		buf.WriteByte(']')
 		return buf.Bytes(), nil
 	default:
+		// For structs, convert to map first.
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Struct {
+			m := structToMap(rv)
+			return Marshal(m)
+		}
 		return nil, fmt.Errorf("unsupported type for marshal: %T", vv)
 	}
 }
 
-// Updated escapeString to use a single-pass strings.Builder loop.
+// structToMap converts a struct into a map[string]any using json tags.
+func structToMap(v reflect.Value) map[string]any {
+	fields := getStructFields(v.Type())
+	m := make(map[string]any, len(fields))
+	for _, info := range fields {
+		fv := v.FieldByIndex(info.index)
+		m[info.name] = fv.Interface()
+	}
+	return m
+}
+
+// escapeString uses a single-pass strings.Builder to reduce allocations.
 func escapeString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
-	// ...replacing multiple ReplaceAll calls with a single loop...
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '\\':
