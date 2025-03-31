@@ -1,0 +1,31 @@
+{
+    "name": {
+        "firstName": "Alice",
+        "lastName": "Smith"
+    },
+    "email": "alice.smith@example.com",
+    "address": {
+        "street": "456 Elm St",
+        "city": "Othertown",
+        "state": "CA",
+        "zipCode": "90210"
+    },
+    "skills": [
+        {
+            "name": "JavaScript",
+            "level": "expert"
+        },
+        {
+            "name": "Go",
+            "level": "intermediate"
+        }
+    ],
+    "employmentDetails": {
+        "startDate": "2021-06-15T08:30:00Z",
+        "salary": 50000
+    },
+    "role": {
+        "position": "Developer",
+        "programmingLanguages": [ "Go", "Python", "JavaScript" ]
+    }
+}

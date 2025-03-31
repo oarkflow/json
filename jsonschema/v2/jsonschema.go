@@ -870,6 +870,36 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	if schema.ID != "" {
 		compiler.schemas[schema.ID] = schema
 	}
+	if len(schema.Type) == 0 {
+		var unionTypes []string
+		if len(schema.OneOf) > 0 {
+			for _, candidate := range schema.OneOf {
+				if len(candidate.Type) > 0 {
+					for _, t := range candidate.Type {
+						if !slices.Contains(unionTypes, t) {
+							unionTypes = append(unionTypes, t)
+						}
+					}
+				}
+			}
+		}
+		if len(unionTypes) == 0 && len(schema.AnyOf) > 0 {
+			for _, candidate := range schema.AnyOf {
+				if len(candidate.Type) > 0 {
+					for _, t := range candidate.Type {
+						if !slices.Contains(unionTypes, t) {
+							unionTypes = append(unionTypes, t)
+						}
+					}
+				}
+			}
+		}
+		if len(unionTypes) > 0 {
+			schema.Type = SchemaType(unionTypes)
+		} else if schema.Properties != nil || (schema.If != nil || schema.Then != nil || schema.Else != nil) {
+			schema.Type = SchemaType{"object"}
+		}
+	}
 	if err := compileDraft2020Keywords(m, schema); err != nil {
 		return nil, err
 	}
@@ -1334,6 +1364,18 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	data, err := s.prepareData(unprepared)
 	if err != nil {
 		return fmt.Errorf("at %s: failed to prepare data: %w", instancePath, err)
+	}
+	if obj, ok := data.(map[string]any); ok {
+		for _, field := range s.Required {
+			if _, exists := obj[field]; !exists {
+				if s.Properties != nil {
+					if propSchema, ok := (*s.Properties)[field]; ok && propSchema.Default != nil {
+						continue
+					}
+				}
+				return fmt.Errorf("at %s: missing required field '%s'", instancePath, field)
+			}
+		}
 	}
 	if err := validateApplicatorKeywords(data, s); err != nil {
 		return fmt.Errorf("at %s: %w", instancePath, err)
