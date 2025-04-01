@@ -1043,13 +1043,13 @@ var formatValidators = map[string]func(string) error{
 		return nil
 	},
 	"ipv4": func(value string) error {
-		if net.ParseIP(value) == nil || strings.contains(value, ":") {
+		if net.ParseIP(value) == nil || strings.Contains(value, ":") {
 			return fmt.Errorf("invalid IPv4 address")
 		}
 		return nil
 	},
 	"ipv6": func(value string) error {
-		if net.ParseIP(value) == nil || !strings.contains(value, ":") {
+		if net.ParseIP(value) == nil || !strings.Contains(value, ":") {
 			return fmt.Errorf("invalid IPv6 address")
 		}
 		return nil
@@ -1989,13 +1989,42 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 
 // UnmarshalRequest validates and unmarshals data from an http.Request according to the Schema’s "In" and "Field" properties.
 func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
-	in := "body"
-	if s.In != nil && *s.In != "" {
-		in = *s.In
-	}
-	data, err := extractDataFromRequest(r, in, s.Field)
-	if err != nil {
-		return err
+	var data any
+	// If top-level schema is an object with properties, merge the body with property-level extraction.
+	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
+		bodyData, err := extractDataFromRequest(r, "body", nil)
+		if err != nil {
+			bodyData = map[string]any{}
+		}
+		m, ok := bodyData.(map[string]any)
+		if !ok {
+			m = map[string]any{}
+		}
+		// For each property specifying a non-body source, override its value.
+		for key, propSchema := range *s.Properties {
+			if propSchema.In != nil && *propSchema.In != "body" {
+				fieldName := key
+				if propSchema.Field != nil && *propSchema.Field != "" {
+					fieldName = *propSchema.Field
+				}
+				// Extract from request using the property schema's In value.
+				val, err := extractDataFromRequest(r, *propSchema.In, &fieldName)
+				if err == nil {
+					m[key] = val
+				}
+			}
+		}
+		data = m
+	} else {
+		in := "body"
+		if s.In != nil && *s.In != "" {
+			in = *s.In
+		}
+		var err error
+		data, err = extractDataFromRequest(r, in, s.Field)
+		if err != nil {
+			return err
+		}
 	}
 	merged, err := s.SmartUnmarshal(data)
 	if err != nil {
@@ -2066,13 +2095,39 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 
 // UnmarshalFiberCtx validates and unmarshals data from a fiber‑style context based on the Schema’s "in" and "field" properties.
 func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
-	in := "body"
-	if s.In != nil && *s.In != "" {
-		in = *s.In
-	}
-	data, err := extractDataFromFiberCtx(ctx, in, s.Field)
-	if err != nil {
-		return err
+	var data any
+	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
+		bodyData, err := extractDataFromFiberCtx(ctx, "body", nil)
+		if err != nil {
+			bodyData = map[string]any{}
+		}
+		m, ok := bodyData.(map[string]any)
+		if !ok {
+			m = map[string]any{}
+		}
+		for key, propSchema := range *s.Properties {
+			if propSchema.In != nil && *propSchema.In != "body" {
+				fieldName := key
+				if propSchema.Field != nil && *propSchema.Field != "" {
+					fieldName = *propSchema.Field
+				}
+				val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName)
+				if err == nil {
+					m[key] = val
+				}
+			}
+		}
+		data = m
+	} else {
+		in := "body"
+		if s.In != nil && *s.In != "" {
+			in = *s.In
+		}
+		var err error
+		data, err = extractDataFromFiberCtx(ctx, in, s.Field)
+		if err != nil {
+			return err
+		}
 	}
 	merged, err := s.SmartUnmarshal(data)
 	if err != nil {

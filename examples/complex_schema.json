@@ -16,7 +16,8 @@
             "properties": {
                 "firstName": {
                     "type": "string",
-                    "default": "John"
+                    "default": "John",
+                    "in": "param"
                 },
                 "lastName": {
                     "type": "string",
