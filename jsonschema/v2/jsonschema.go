@@ -24,6 +24,8 @@ import (
 	"github.com/brianvoe/gofakeit/v6"
 	"github.com/oarkflow/date"
 	"github.com/oarkflow/expr"
+
+	"github.com/oarkflow/json/jsonmap"
 )
 
 func convertValue(val any, expectedType string) (any, error) {
@@ -1405,7 +1407,7 @@ func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 
 func (c *Compiler) Compile(data []byte) (*Schema, error) {
 	var tmp any
-	if err := json.Unmarshal(data, &tmp); err != nil {
+	if err := jsonmap.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
 	key, err := computeCacheKey(tmp)
