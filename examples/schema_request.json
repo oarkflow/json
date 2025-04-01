@@ -1,0 +1,32 @@
+{
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "object",
+            "properties": {
+                "firstName": {
+                    "type": "string"
+                },
+                "middleName": {
+                    "type": "string"
+                },
+                "lastName": {
+                    "type": "string"
+                }
+            },
+            "required": [ "firstName", "lastName" ]
+        },
+        "auth": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string",
+                    "in": "query"
+                }
+            },
+            "required": [ "token" ]
+        },
+        "age": { "type": "number", "in": "query" }
+    },
+    "required": [ "name", "age" ]
+}

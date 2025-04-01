@@ -1968,7 +1968,24 @@ func selfValidateSchema(schema *Schema) error {
 	return nil
 }
 
-// extractDataFromRequest extracts data from the request based on the provided "in" value and field.
+// Add helper function to retrieve nested values using dot‑notation.
+func getNestedValue(m map[string]any, field string) (any, bool) {
+	parts := strings.Split(field, ".")
+	var value any = m
+	for _, part := range parts {
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		value, ok = obj[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+// Modified extractDataFromRequest with deep nesting support.
 func extractDataFromRequest(r *http.Request, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
 	case "query":
@@ -1981,8 +1998,14 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 			}
 		}
 		if field != nil && *field != "" {
-			if val, exists := m[*field]; exists {
-				return val, nil
+			if strings.Contains(*field, ".") {
+				if val, exists := getNestedValue(m, *field); exists {
+					return val, nil
+				}
+			} else {
+				if val, exists := m[*field]; exists {
+					return val, nil
+				}
 			}
 			return nil, fmt.Errorf("field %q not found in query", *field)
 		}
@@ -1995,14 +2018,43 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 				m[k] = v
 			}
 			if field != nil && *field != "" {
-				if val, exists := m[*field]; exists {
-					return val, nil
+				if strings.Contains(*field, ".") {
+					if val, exists := getNestedValue(m, *field); exists {
+						return val, nil
+					}
+				} else {
+					if val, exists := m[*field]; exists {
+						return val, nil
+					}
 				}
 				return nil, fmt.Errorf("field %q not found in params", *field)
 			}
 			return m, nil
 		}
 		return nil, fmt.Errorf("no params found in context")
+	case "header":
+		m := map[string]any{}
+		// Iterate over the headers.
+		for k, v := range r.Header {
+			if len(v) == 1 {
+				m[k] = v[0]
+			} else {
+				m[k] = v
+			}
+		}
+		if field != nil && *field != "" {
+			if strings.Contains(*field, ".") {
+				if val, exists := getNestedValue(m, *field); exists {
+					return val, nil
+				}
+			} else {
+				if val, exists := m[*field]; exists {
+					return val, nil
+				}
+			}
+			return nil, fmt.Errorf("field %q not found in header", *field)
+		}
+		return m, nil
 	case "body":
 		fallthrough
 	default:
@@ -2018,8 +2070,14 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 		}
 		if field != nil && *field != "" {
 			if m, ok := data.(map[string]any); ok {
-				if val, exists := m[*field]; exists {
-					return val, nil
+				if strings.Contains(*field, ".") {
+					if val, exists := getNestedValue(m, *field); exists {
+						return val, nil
+					}
+				} else {
+					if val, exists := m[*field]; exists {
+						return val, nil
+					}
 				}
 				return nil, fmt.Errorf("field %q not found in body", *field)
 			}
@@ -2105,20 +2163,49 @@ type Ctx interface {
 	Params(key string) string
 	Query(key string) string
 	Body() []byte
+	Get(key string) string
 	BodyParser(dest interface{}) error
 }
 
-// extractDataFromFiberCtx extracts data from the fiber‑style context based on "in" value and optional field.
+// Modified extractDataFromFiberCtx with deep nesting support.
 func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
+	case "header":
+		if field != nil && *field != "" {
+			// For fiber, assume header value is a string.
+			return ctx.Get(*field), nil
+		}
+		return nil, errors.New("for header extraction, a field name must be provided")
 	case "query":
 		if field != nil && *field != "" {
-			return ctx.Query(*field), nil
+			val := ctx.Query(*field)
+			if val != "" {
+				return val, nil
+			}
+			// Attempt deep extraction if field contains dots.
+			var m map[string]any
+			if err := json.Unmarshal([]byte(ctx.Query("")), &m); err == nil && strings.Contains(*field, ".") {
+				if v, exists := getNestedValue(m, *field); exists {
+					return v, nil
+				}
+			}
+			return nil, errors.New("for query extraction, a valid field name must be provided")
 		}
 		return nil, errors.New("for query extraction, a field name must be provided")
 	case "params":
 		if field != nil && *field != "" {
-			return ctx.Params(*field), nil
+			val := ctx.Params(*field)
+			if val != "" {
+				return val, nil
+			}
+			// If dot notation is used, attempt deep extraction (if supported).
+			var m map[string]any
+			if strings.Contains(*field, ".") {
+				if v, exists := getNestedValue(m, *field); exists {
+					return v, nil
+				}
+			}
+			return nil, errors.New("for params extraction, a valid field name must be provided")
 		}
 		return nil, errors.New("for params extraction, a field name must be provided")
 	case "body":
@@ -2129,8 +2216,14 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 			if err := ctx.BodyParser(&m); err != nil {
 				return nil, fmt.Errorf("failed to parse body: %v", err)
 			}
-			if val, exists := m[*field]; exists {
-				return val, nil
+			if strings.Contains(*field, ".") {
+				if val, exists := getNestedValue(m, *field); exists {
+					return val, nil
+				}
+			} else {
+				if val, exists := m[*field]; exists {
+					return val, nil
+				}
 			}
 			return nil, fmt.Errorf("field %q not found in body", *field)
 		}
@@ -2143,7 +2236,7 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 	}
 }
 
-// UnmarshalFiberCtx validates and unmarshals data from a fiber‑style context based on the Schema’s "in" and "field" properties.
+// UnmarshalFiberCtx validates and unmarshal data from a fiber‑style context based on the Schema’s "in" and "field" properties.
 func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 	var data any
 	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
