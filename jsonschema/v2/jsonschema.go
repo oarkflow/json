@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -279,9 +280,21 @@ func (p *JSONParser) parseNumber() (any, error) {
 	return f, nil
 }
 
+var jsonParserPool = sync.Pool{
+	New: func() interface{} {
+		return &JSONParser{}
+	},
+}
+
 func ParseJSON(data []byte) (any, error) {
-	parser := JSONParser{data: data, pos: 0}
-	return parser.parseValue()
+	parser := jsonParserPool.Get().(*JSONParser)
+	parser.data = data
+	parser.pos = 0
+	ret, err := parser.parseValue()
+
+	parser.data = nil
+	jsonParserPool.Put(parser)
+	return ret, err
 }
 
 type SchemaType []string
@@ -302,6 +315,12 @@ func (st *SchemaType) UnmarshalJSON(data []byte) error {
 
 type Rat float64
 type SchemaMap map[string]*Schema
+
+// NEW: add discriminator struct
+type Discriminator struct {
+	PropertyName string            `json:"propertyName"`
+	Mapping      map[string]string `json:"mapping,omitempty"`
+}
 
 type Schema struct {
 	compiledPatterns          map[string]*regexp.Regexp
@@ -372,6 +391,8 @@ type Schema struct {
 	Examples                  []any               `json:"examples,omitempty"`
 	In                        *string             `json:"in,omitempty"`
 	Field                     *string             `json:"field,omitempty"`
+	// NEW: add discriminator field per 2020-12 specification
+	Discriminator *Discriminator `json:"discriminator,omitempty"`
 }
 
 type Compiler struct {
@@ -1021,7 +1042,79 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	if err := selfValidateSchema(schema); err != nil {
 		return nil, fmt.Errorf("schema self‑validation failed: %w", err)
 	}
+	// At the end, before "if err := compileDraft2020Keywords..."
+	if disc, exists := m["discriminator"]; exists {
+		if d, ok := disc.(map[string]any); ok {
+			prop, ok := d["propertyName"].(string)
+			if !ok || prop == "" {
+				return nil, errors.New("discriminator: propertyName must be a non-empty string")
+			}
+			mapping := make(map[string]string)
+			if mapp, ok := d["mapping"].(map[string]any); ok {
+				for k, v := range mapp {
+					if str, ok := v.(string); ok {
+						mapping[k] = str
+					}
+				}
+			}
+			schema.Discriminator = &Discriminator{
+				PropertyName: prop,
+				Mapping:      mapping,
+			}
+		} else {
+			return nil, errors.New("discriminator must be an object")
+		}
+	}
 	return schema, nil
+}
+
+// NEW: add helper function for discriminator-based validation
+func validateDiscriminator(instance any, s *Schema) error {
+	obj, ok := instance.(map[string]any)
+	if !ok {
+		return errors.New("discriminator: instance is not an object")
+	}
+	discVal, ok := obj[s.Discriminator.PropertyName]
+	if !ok {
+		return fmt.Errorf("discriminator: property '%s' not found", s.Discriminator.PropertyName)
+	}
+	discStr, ok := discVal.(string)
+	if !ok {
+		return fmt.Errorf("discriminator: property '%s' is not a string", s.Discriminator.PropertyName)
+	}
+	var candidate *Schema
+	// If mapping provided, use it to select candidate from oneOf
+	if len(s.Discriminator.Mapping) > 0 {
+		if ref, exists := s.Discriminator.Mapping[discStr]; exists {
+			for _, cand := range s.OneOf {
+				if cand.ID == ref || cand.Ref == ref {
+					candidate = cand
+					break
+				}
+			}
+			if candidate == nil {
+				return fmt.Errorf("discriminator: no candidate schema found with reference %q", ref)
+			}
+		} else {
+			return fmt.Errorf("discriminator: no mapping defined for value %q", discStr)
+		}
+	} else {
+		// Otherwise, try to pick exactly one candidate that validates the instance.
+		validCount := 0
+		for _, cand := range s.OneOf {
+			if err := cand.Validate(instance); err == nil {
+				candidate = cand
+				validCount++
+			}
+		}
+		if validCount != 1 {
+			return fmt.Errorf("discriminator: expected exactly one valid candidate, got %d", validCount)
+		}
+	}
+	if err := candidate.Validate(instance); err != nil {
+		return fmt.Errorf("discriminator: candidate schema validation failed: %v", err)
+	}
+	return nil
 }
 
 var remoteCache = struct {
@@ -1054,40 +1147,70 @@ func compileDraft2020Keywords(m map[string]any, schema *Schema) error {
 	return nil
 }
 
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
 func canonicalize(v any) (string, error) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	if err := canonicalizeToBuffer(buf, v); err != nil {
+		bufferPool.Put(buf)
+		return "", err
+	}
+	result := buf.String()
+	bufferPool.Put(buf)
+	return result, nil
+}
+
+func canonicalizeToBuffer(buf *bytes.Buffer, v any) error {
 	switch t := v.(type) {
 	case map[string]any:
+		buf.WriteByte('{')
+
 		var keys []string
 		for k := range t {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		var parts []string
-		for _, k := range keys {
-			val, err := canonicalize(t[k])
-			if err != nil {
-				return "", err
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
 			}
-			parts = append(parts, fmt.Sprintf("%q:%s", k, val))
+
+			b, err := json.Marshal(k)
+			if err != nil {
+				return err
+			}
+			buf.Write(b)
+			buf.WriteByte(':')
+			if err := canonicalizeToBuffer(buf, t[k]); err != nil {
+				return err
+			}
 		}
-		return "{" + strings.Join(parts, ",") + "}", nil
+		buf.WriteByte('}')
 	case []any:
-		var parts []string
-		for _, elem := range t {
-			val, err := canonicalize(elem)
-			if err != nil {
-				return "", err
+		buf.WriteByte('[')
+		for i, elem := range t {
+			if i > 0 {
+				buf.WriteByte(',')
 			}
-			parts = append(parts, val)
+			if err := canonicalizeToBuffer(buf, elem); err != nil {
+				return err
+			}
 		}
-		return "[" + strings.Join(parts, ",") + "]", nil
+		buf.WriteByte(']')
 	default:
+
 		b, err := json.Marshal(v)
 		if err != nil {
-			return "", err
+			return err
 		}
-		return string(b), nil
+		buf.Write(b)
 	}
+	return nil
 }
 
 func computeCacheKey(v any) (string, error) {
@@ -1199,6 +1322,10 @@ func validateFormat(format, value string) error {
 	return nil
 }
 
+var httpClient = &http.Client{
+	Timeout: 5 * time.Second,
+}
+
 func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	remoteCache.RLock()
 	if cached, ok := remoteCache.schemas[ref]; ok {
@@ -1215,7 +1342,7 @@ func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	if err != nil || u.Scheme == "" {
 		return nil, fmt.Errorf("invalid remote reference '%s'", ref)
 	}
-	resp, err := http.Get(ref)
+	resp, err := httpClient.Get(ref)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch remote schema from '%s': %v", ref, err)
 	}
@@ -1438,6 +1565,32 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 }
 
 func validateSimpleConstraints(data any, s *Schema) error {
+
+	if str, ok := data.(string); ok {
+		if s.MaxLength != nil && float64(len(str)) > *s.MaxLength {
+			return fmt.Errorf("string length %d exceeds maxLength %v", len(str), *s.MaxLength)
+		}
+		if s.MinLength != nil && float64(len(str)) < *s.MinLength {
+			return fmt.Errorf("string length %d is less than minLength %v", len(str), *s.MinLength)
+		}
+	}
+	if arr, ok := data.([]any); ok {
+		if s.MaxItems != nil && float64(len(arr)) > *s.MaxItems {
+			return fmt.Errorf("array has %d items exceeding maxItems %v", len(arr), *s.MaxItems)
+		}
+		if s.MinItems != nil && float64(len(arr)) < *s.MinItems {
+			return fmt.Errorf("array has %d items fewer than minItems %v", len(arr), *s.MinItems)
+		}
+	}
+	if obj, ok := data.(map[string]any); ok {
+		if s.MaxProperties != nil && float64(len(obj)) > *s.MaxProperties {
+			return fmt.Errorf("object has %d properties exceeding maxProperties %v", len(obj), *s.MaxProperties)
+		}
+		if s.MinProperties != nil && float64(len(obj)) < *s.MinProperties {
+			return fmt.Errorf("object has %d properties fewer than minProperties %v", len(obj), *s.MinProperties)
+		}
+	}
+
 	if s.Pattern != nil {
 		if str, ok := data.(string); ok {
 			re, ok := s.compiledPatterns[*s.Pattern]
@@ -1850,6 +2003,39 @@ func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	if err != nil {
 		return fmt.Errorf("failed SmartUnmarshal: %v", err)
 	}
+
+	if mDest, ok := dest.(*map[string]any); ok {
+		if m, ok := merged.(map[string]any); ok {
+			*mDest = m
+			return nil
+		}
+	}
+	switch v := merged.(type) {
+	case string:
+		if ptr, ok := dest.(*string); ok {
+			*ptr = v
+			return nil
+		}
+	case float64:
+		if ptr, ok := dest.(*float64); ok {
+			*ptr = v
+			return nil
+		}
+		if ptr, ok := dest.(*int); ok {
+			*ptr = int(v)
+			return nil
+		}
+	case bool:
+		if ptr, ok := dest.(*bool); ok {
+			*ptr = v
+			return nil
+		}
+	case []any:
+		if ptr, ok := dest.(*[]any); ok {
+			*ptr = v
+			return nil
+		}
+	}
 	mergedBytes, err := json.Marshal(merged)
 	if err != nil {
 		return fmt.Errorf("failed to marshal merged result: %v", err)
@@ -1916,9 +2102,16 @@ func validateApplicatorKeywords(instance any, s *Schema) error {
 			errs = append(errs, err.Error())
 		}
 	}
+	// NEW: if discriminator is set in a oneOf then use it
 	if len(s.OneOf) > 0 {
-		if err := validateSubschemas("oneOf", s.OneOf, instance); err != nil {
-			errs = append(errs, err.Error())
+		if s.Discriminator != nil {
+			if err := validateDiscriminator(instance, s); err != nil {
+				errs = append(errs, err.Error())
+			}
+		} else {
+			if err := validateSubschemas("oneOf", s.OneOf, instance); err != nil {
+				errs = append(errs, err.Error())
+			}
 		}
 	}
 	if s.Not != nil {
