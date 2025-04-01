@@ -72,7 +72,7 @@ func (d *decoder) decodeValue() (any, error) {
 
 func (d *decoder) decodeObject() (map[string]any, error) {
 	obj := make(map[string]any)
-	d.pos++ // skip '{'
+	d.pos++
 	d.skipWhitespace()
 	if d.pos < d.len && d.data[d.pos] == '}' {
 		d.pos++
@@ -91,7 +91,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		if d.pos >= d.len || d.data[d.pos] != ':' {
 			return nil, d.errorf("expected ':' after key")
 		}
-		d.pos++ // skip ':'
+		d.pos++
 		d.skipWhitespace()
 		val, err := d.decodeValue()
 		if err != nil {
@@ -104,7 +104,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		}
 		if d.data[d.pos] == ',' {
 			d.pos++
-			// Allow trailing comma if enabled.
+
 			d.skipWhitespace()
 			if d.options.AllowTrailingComma && d.pos < d.len && d.data[d.pos] == '}' {
 				d.pos++
@@ -123,7 +123,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 
 func (d *decoder) decodeArray() ([]any, error) {
 	arr := make([]any, 0, 8)
-	d.pos++ // skip '['
+	d.pos++
 	d.skipWhitespace()
 	if d.pos < d.len && d.data[d.pos] == ']' {
 		d.pos++
@@ -165,7 +165,7 @@ func (d *decoder) decodeString() (string, error) {
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
-			// fast path: no escape encountered
+
 			if noEscape {
 				s := b2s(d.data[start:d.pos])
 				d.pos++
@@ -178,7 +178,7 @@ func (d *decoder) decodeString() (string, error) {
 		}
 		d.pos++
 	}
-	// Fallback: decode with escape handling.
+
 	d.pos = start
 	return d.decodeStringEscaped()
 }
@@ -281,11 +281,11 @@ func (d *decoder) decodeNull() (any, error) {
 }
 
 type fieldInfo struct {
-	index []int  // Field index chain (for nested fields)
-	name  string // JSON key name to match
+	index []int
+	name  string
 }
 
-var structCache sync.Map // map[reflect.Type][]fieldInfo
+var structCache sync.Map
 
 func getStructFields(t reflect.Type) []fieldInfo {
 	if cached, ok := structCache.Load(t); ok {
@@ -294,7 +294,7 @@ func getStructFields(t reflect.Type) []fieldInfo {
 	var fields []fieldInfo
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		// Only process exported fields.
+
 		if field.PkgPath != "" {
 			continue
 		}
@@ -315,12 +315,11 @@ func Unmarshal(data []byte, v any) error {
 	return UnmarshalWithOptions(data, v, DecoderOptions{})
 }
 
-// UnmarshalWithOptions decodes JSON data with provided decoder options.
 func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	if v == nil {
 		return errors.New("nil target provided")
 	}
-	// Handle basic types directly.
+
 	switch target := v.(type) {
 	case *map[string]any:
 		d := newDecoder(data, opts)
@@ -492,45 +491,69 @@ func assignValue(fv reflect.Value, raw any) error {
 	return nil
 }
 
-// encoder is a zero‑allocation JSON encoder that writes into an internal byte slice.
 type encoder struct {
 	buf []byte
+	cap int
 }
 
-// newEncoder creates a new encoder with an initial capacity.
 func newEncoder() *encoder {
-	// preallocate with a reasonable capacity to avoid many resizes.
-	return &encoder{buf: make([]byte, 0, 1024)}
-}
-
-// Marshal encodes v into JSON without creating intermediate allocations.
-func Marshal(v any) ([]byte, error) {
-	enc := newEncoder()
-	if err := enc.encode(v); err != nil {
-		return nil, err
+	const initialCapacity = 4096
+	return &encoder{
+		buf: make([]byte, 0, initialCapacity),
+		cap: initialCapacity,
 	}
-	return enc.buf, nil
 }
 
-// encode dispatches encoding based on type.
+func (e *encoder) reset() {
+	e.buf = e.buf[:0]
+}
+
+func (e *encoder) ensureCapacity(n int) error {
+	if len(e.buf)+n > e.cap {
+		return errors.New("buffer too small")
+	}
+	return nil
+}
+
+func (e *encoder) writeByte(b byte) error {
+	if err := e.ensureCapacity(1); err != nil {
+		return err
+	}
+	e.buf = append(e.buf, b)
+	return nil
+}
+
+func (e *encoder) writeString(s string) error {
+	if err := e.ensureCapacity(len(s)); err != nil {
+		return err
+	}
+	e.buf = append(e.buf, s...)
+	return nil
+}
+
 func (e *encoder) encode(v any) error {
 	switch vv := v.(type) {
 	case nil:
-		e.writeString("null")
+		return e.writeString("null")
 	case string:
-		e.writeByte('"')
-		e.encodeString(vv)
-		e.writeByte('"')
+		if err := e.writeByte('"'); err != nil {
+			return err
+		}
+		if err := e.encodeString(vv); err != nil {
+			return err
+		}
+		return e.writeByte('"')
 	case float64:
-		e.buf = strconv.AppendFloat(e.buf, vv, 'f', -1, 64)
+		s := strconv.FormatFloat(vv, 'f', -1, 64)
+		return e.writeString(s)
 	case int:
-		e.buf = strconv.AppendInt(e.buf, int64(vv), 10)
+		s := strconv.FormatInt(int64(vv), 10)
+		return e.writeString(s)
 	case bool:
 		if vv {
-			e.writeString("true")
-		} else {
-			e.writeString("false")
+			return e.writeString("true")
 		}
+		return e.writeString("false")
 	case map[string]any:
 		return e.encodeMap(vv)
 	case []any:
@@ -546,78 +569,91 @@ func (e *encoder) encode(v any) error {
 			return fmt.Errorf("unsupported type for marshal: %T", v)
 		}
 	}
-	return nil
 }
 
-// encodeMap encodes a map[string]any.
 func (e *encoder) encodeMap(m map[string]any) error {
-	e.writeByte('{')
+	if err := e.writeByte('{'); err != nil {
+		return err
+	}
 	first := true
 	for k, val := range m {
 		if !first {
-			e.writeByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		first = false
-		e.writeByte('"')
-		e.encodeString(k)
-		e.writeByte('"')
-		e.writeByte(':')
+		if err := e.writeByte('"'); err != nil {
+			return err
+		}
+		if err := e.encodeString(k); err != nil {
+			return err
+		}
+		if err := e.writeByte('"'); err != nil {
+			return err
+		}
+		if err := e.writeByte(':'); err != nil {
+			return err
+		}
 		if err := e.encode(val); err != nil {
 			return err
 		}
 	}
-	e.writeByte('}')
-	return nil
+	return e.writeByte('}')
 }
 
-// encodeSlice encodes a []any slice.
 func (e *encoder) encodeSlice(s []any) error {
-	e.writeByte('[')
+	if err := e.writeByte('['); err != nil {
+		return err
+	}
 	for i, val := range s {
 		if i > 0 {
-			e.writeByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		if err := e.encode(val); err != nil {
 			return err
 		}
 	}
-	e.writeByte(']')
-	return nil
+	return e.writeByte(']')
 }
 
-// encodeReflectSlice encodes any slice/array via reflection.
 func (e *encoder) encodeReflectSlice(rv reflect.Value) error {
-	e.writeByte('[')
+	if err := e.writeByte('['); err != nil {
+		return err
+	}
 	n := rv.Len()
 	for i := 0; i < n; i++ {
 		if i > 0 {
-			e.writeByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		if err := e.encode(rv.Index(i).Interface()); err != nil {
 			return err
 		}
 	}
-	e.writeByte(']')
-	return nil
+	return e.writeByte(']')
 }
 
-// encodeStruct encodes a struct by iterating over its exported fields.
-// It uses the "json" tag if present.
 func (e *encoder) encodeStruct(rv reflect.Value) error {
-	e.writeByte('{')
+	if err := e.writeByte('{'); err != nil {
+		return err
+	}
 	rt := rv.Type()
 	first := true
 	for i := 0; i < rt.NumField(); i++ {
 		field := rt.Field(i)
-		// skip unexported fields.
 		if field.PkgPath != "" {
 			continue
 		}
 		if !first {
-			e.writeByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		first = false
-		// use the JSON tag if available.
 		key := field.Name
 		if tag := field.Tag.Get("json"); tag != "" {
 			parts := strings.Split(tag, ",")
@@ -625,60 +661,89 @@ func (e *encoder) encodeStruct(rv reflect.Value) error {
 				key = parts[0]
 			}
 		}
-		e.writeByte('"')
-		e.encodeString(key)
-		e.writeByte('"')
-		e.writeByte(':')
+		if err := e.writeByte('"'); err != nil {
+			return err
+		}
+		if err := e.encodeString(key); err != nil {
+			return err
+		}
+		if err := e.writeByte('"'); err != nil {
+			return err
+		}
+		if err := e.writeByte(':'); err != nil {
+			return err
+		}
 		if err := e.encode(rv.Field(i).Interface()); err != nil {
 			return fmt.Errorf("field %q: %w", key, err)
 		}
 	}
-	e.writeByte('}')
-	return nil
+	return e.writeByte('}')
 }
 
-// encodeString writes a JSON-escaped string (without the surrounding quotes).
-func (e *encoder) encodeString(s string) {
+func (e *encoder) encodeString(s string) error {
 	start := 0
-	// scan for characters that need escaping.
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		// escape backslash, quote, or control characters (< 0x20).
 		if c == '\\' || c == '"' || c < 0x20 {
 			if start < i {
-				e.writeString(s[start:i])
+				if err := e.writeString(s[start:i]); err != nil {
+					return err
+				}
 			}
 			switch c {
 			case '\\', '"':
-				e.writeByte('\\')
-				e.writeByte(c)
+				if err := e.writeString(`\`); err != nil {
+					return err
+				}
+				if err := e.writeByte(c); err != nil {
+					return err
+				}
 			case '\n':
-				e.writeString(`\n`)
+				if err := e.writeString(`\n`); err != nil {
+					return err
+				}
 			case '\r':
-				e.writeString(`\r`)
+				if err := e.writeString(`\r`); err != nil {
+					return err
+				}
 			case '\t':
-				e.writeString(`\t`)
+				if err := e.writeString(`\t`); err != nil {
+					return err
+				}
 			default:
-				// format control characters as \u00XX.
-				e.writeString(`\u00`)
+				if err := e.writeString(`\u00`); err != nil {
+					return err
+				}
 				hex := "0123456789abcdef"
-				e.writeByte(hex[c>>4])
-				e.writeByte(hex[c&0xF])
+				if err := e.writeByte(hex[c>>4]); err != nil {
+					return err
+				}
+				if err := e.writeByte(hex[c&0xF]); err != nil {
+					return err
+				}
 			}
 			start = i + 1
 		}
 	}
 	if start < len(s) {
-		e.writeString(s[start:])
+		return e.writeString(s[start:])
 	}
+	return nil
 }
 
-// writeByte appends a single byte to the buffer.
-func (e *encoder) writeByte(b byte) {
-	e.buf = append(e.buf, b)
+var encoderPool = sync.Pool{
+	New: func() any { return newEncoder() },
 }
 
-// writeString appends a string to the buffer.
-func (e *encoder) writeString(s string) {
-	e.buf = append(e.buf, s...)
+func Marshal(v any) ([]byte, error) {
+	enc := encoderPool.Get().(*encoder)
+	enc.reset()
+	if err := enc.encode(v); err != nil {
+		encoderPool.Put(enc)
+		return nil, err
+	}
+	ret := make([]byte, len(enc.buf))
+	copy(ret, enc.buf)
+	encoderPool.Put(enc)
+	return ret, nil
 }
