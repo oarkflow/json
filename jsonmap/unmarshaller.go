@@ -1,7 +1,6 @@
 package jsonmap
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,28 +11,31 @@ import (
 	"unsafe"
 )
 
-// -----------------------------------------------------------------------------
-// Zero‑Allocation Helpers & Decoder/Encoder (existing code)
-// -----------------------------------------------------------------------------
-
-// b2s converts []byte to string without extra copy.
-// (Be sure that the underlying slice is not modified.)
 func b2s(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }
 
-// ----------------------
-// JSON Decoder (Zero‑Alloc)
-// ----------------------
-
-type decoder struct {
-	data []byte
-	pos  int
-	len  int
+type DecoderOptions struct {
+	AllowTrailingComma bool
+	WithErrorContext   bool
 }
 
-func newDecoder(data []byte) *decoder {
-	return &decoder{data: data, pos: 0, len: len(data)}
+type decoder struct {
+	data    []byte
+	pos     int
+	len     int
+	options DecoderOptions
+}
+
+func newDecoder(data []byte, opts DecoderOptions) *decoder {
+	return &decoder{data: data, pos: 0, len: len(data), options: opts}
+}
+
+func (d *decoder) errorf(msg string) error {
+	if d.options.WithErrorContext {
+		return fmt.Errorf("%s at pos %d", msg, d.pos)
+	}
+	return errors.New(msg)
 }
 
 func (d *decoder) skipWhitespace() {
@@ -50,7 +52,7 @@ func (d *decoder) skipWhitespace() {
 func (d *decoder) decodeValue() (any, error) {
 	d.skipWhitespace()
 	if d.pos >= d.len {
-		return nil, errors.New("unexpected end of input")
+		return nil, d.errorf("unexpected end of input")
 	}
 	switch d.data[d.pos] {
 	case '"':
@@ -79,7 +81,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 	for {
 		d.skipWhitespace()
 		if d.pos >= d.len || d.data[d.pos] != '"' {
-			return nil, errors.New("expected string key")
+			return nil, d.errorf("expected string key")
 		}
 		key, err := d.decodeString()
 		if err != nil {
@@ -87,7 +89,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		}
 		d.skipWhitespace()
 		if d.pos >= d.len || d.data[d.pos] != ':' {
-			return nil, errors.New("expected ':' after key")
+			return nil, d.errorf("expected ':' after key")
 		}
 		d.pos++ // skip ':'
 		d.skipWhitespace()
@@ -98,23 +100,29 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		obj[key] = val
 		d.skipWhitespace()
 		if d.pos >= d.len {
-			return nil, errors.New("unexpected end of object")
+			return nil, d.errorf("unexpected end of object")
 		}
 		if d.data[d.pos] == ',' {
 			d.pos++
+			// Allow trailing comma if enabled.
+			d.skipWhitespace()
+			if d.options.AllowTrailingComma && d.pos < d.len && d.data[d.pos] == '}' {
+				d.pos++
+				break
+			}
 			continue
 		} else if d.data[d.pos] == '}' {
 			d.pos++
 			break
 		} else {
-			return nil, errors.New("expected ',' or '}' in object")
+			return nil, d.errorf("expected ',' or '}' in object")
 		}
 	}
 	return obj, nil
 }
 
 func (d *decoder) decodeArray() ([]any, error) {
-	var arr []any
+	arr := make([]any, 0, 8)
 	d.pos++ // skip '['
 	d.skipWhitespace()
 	if d.pos < d.len && d.data[d.pos] == ']' {
@@ -130,50 +138,59 @@ func (d *decoder) decodeArray() ([]any, error) {
 		arr = append(arr, val)
 		d.skipWhitespace()
 		if d.pos >= d.len {
-			return nil, errors.New("unexpected end of array")
+			return nil, d.errorf("unexpected end of array")
 		}
 		if d.data[d.pos] == ',' {
 			d.pos++
+			d.skipWhitespace()
+			if d.options.AllowTrailingComma && d.pos < d.len && d.data[d.pos] == ']' {
+				d.pos++
+				break
+			}
 			continue
 		} else if d.data[d.pos] == ']' {
 			d.pos++
 			break
 		} else {
-			return nil, errors.New("expected ',' or ']' in array")
+			return nil, d.errorf("expected ',' or ']' in array")
 		}
 	}
 	return arr, nil
 }
 
 func (d *decoder) decodeString() (string, error) {
-	// Consume opening quote.
 	d.pos++
 	start := d.pos
+	noEscape := true
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
-			s := b2s(d.data[start:d.pos])
-			d.pos++
-			return s, nil
+			// fast path: no escape encountered
+			if noEscape {
+				s := b2s(d.data[start:d.pos])
+				d.pos++
+				return s, nil
+			}
 		}
 		if c == '\\' {
-			return d.decodeStringEscaped(start)
+			noEscape = false
+			break
 		}
 		d.pos++
 	}
-	return "", errors.New("unterminated string")
+	// Fallback: decode with escape handling.
+	d.pos = start
+	return d.decodeStringEscaped()
 }
 
-func (d *decoder) decodeStringEscaped(start int) (string, error) {
+func (d *decoder) decodeStringEscaped() (string, error) {
 	var runeStack [64]rune
 	var runes []rune
-	capEstimate := d.len - d.pos
-	if capEstimate <= 64 {
+	if d.len-d.pos <= 64 {
 		runes = runeStack[:0]
 	} else {
-		runes = make([]rune, 0, capEstimate)
+		runes = make([]rune, 0, d.len-d.pos)
 	}
-	runes = append(runes, []rune(b2s(d.data[start:d.pos]))...)
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
@@ -183,7 +200,7 @@ func (d *decoder) decodeStringEscaped(start int) (string, error) {
 		if c == '\\' {
 			d.pos++
 			if d.pos >= d.len {
-				return "", errors.New("unexpected end after escape")
+				return "", d.errorf("unexpected end after escape")
 			}
 			esc := d.data[d.pos]
 			var r rune
@@ -202,17 +219,17 @@ func (d *decoder) decodeStringEscaped(start int) (string, error) {
 				r = '\t'
 			case 'u':
 				if d.pos+4 >= d.len {
-					return "", errors.New("incomplete unicode escape")
+					return "", d.errorf("incomplete unicode escape")
 				}
 				hex := b2s(d.data[d.pos+1 : d.pos+5])
 				v, err := strconv.ParseUint(hex, 16, 16)
 				if err != nil {
-					return "", errors.New("invalid unicode escape")
+					return "", d.errorf("invalid unicode escape")
 				}
 				r = rune(v)
 				d.pos += 4
 			default:
-				return "", errors.New("invalid escape character")
+				return "", d.errorf("invalid escape character")
 			}
 			runes = append(runes, r)
 			d.pos++
@@ -222,7 +239,7 @@ func (d *decoder) decodeStringEscaped(start int) (string, error) {
 		runes = append(runes, r)
 		d.pos += size
 	}
-	return "", errors.New("unterminated string")
+	return "", d.errorf("unterminated string")
 }
 
 func (d *decoder) decodeNumber() (float64, error) {
@@ -236,7 +253,11 @@ func (d *decoder) decodeNumber() (float64, error) {
 		}
 	}
 	numStr := b2s(d.data[start:d.pos])
-	return strconv.ParseFloat(numStr, 64)
+	n, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, d.errorf("invalid number")
+	}
+	return n, nil
 }
 
 func (d *decoder) decodeBool() (bool, error) {
@@ -248,7 +269,7 @@ func (d *decoder) decodeBool() (bool, error) {
 		d.pos += 5
 		return false, nil
 	}
-	return false, errors.New("invalid boolean literal")
+	return false, d.errorf("invalid boolean literal")
 }
 
 func (d *decoder) decodeNull() (any, error) {
@@ -256,12 +277,8 @@ func (d *decoder) decodeNull() (any, error) {
 		d.pos += 4
 		return nil, nil
 	}
-	return nil, errors.New("invalid null literal")
+	return nil, d.errorf("invalid null literal")
 }
-
-// ----------------------
-// Caching of Struct Field Metadata
-// ----------------------
 
 type fieldInfo struct {
 	index []int  // Field index chain (for nested fields)
@@ -294,20 +311,19 @@ func getStructFields(t reflect.Type) []fieldInfo {
 	return fields
 }
 
-// ----------------------
-// Unmarshal Implementation
-// ----------------------
-
-// Unmarshal decodes JSON data into the provided variable. It supports basic types,
-// maps, slices, and structs (using reflection and caching).
 func Unmarshal(data []byte, v any) error {
+	return UnmarshalWithOptions(data, v, DecoderOptions{})
+}
+
+// UnmarshalWithOptions decodes JSON data with provided decoder options.
+func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	if v == nil {
 		return errors.New("nil target provided")
 	}
 	// Handle basic types directly.
 	switch target := v.(type) {
 	case *map[string]any:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		d.skipWhitespace()
 		obj, err := d.decodeObject()
 		if err != nil {
@@ -316,7 +332,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = obj
 		return nil
 	case *[]map[string]any:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		d.skipWhitespace()
 		arrRaw, err := d.decodeArray()
 		if err != nil {
@@ -333,7 +349,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = out
 		return nil
 	case *string:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		s, err := d.decodeString()
 		if err != nil {
 			return err
@@ -341,7 +357,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = s
 		return nil
 	case *float64:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -349,7 +365,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = n
 		return nil
 	case *int:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -357,16 +373,15 @@ func Unmarshal(data []byte, v any) error {
 		*target = int(n)
 		return nil
 	case *bool:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		b, err := d.decodeBool()
 		if err != nil {
 			return err
 		}
 		*target = b
 		return nil
-	// --- Handle *interface{} ---
 	case *interface{}:
-		d := newDecoder(data)
+		d := newDecoder(data, opts)
 		d.skipWhitespace()
 		val, err := d.decodeValue()
 		if err != nil {
@@ -385,7 +400,7 @@ func Unmarshal(data []byte, v any) error {
 		return fmt.Errorf("unsupported type: %T", v)
 	}
 
-	d := newDecoder(data)
+	d := newDecoder(data, opts)
 	d.skipWhitespace()
 	m, err := d.decodeObject()
 	if err != nil {
@@ -394,7 +409,6 @@ func Unmarshal(data []byte, v any) error {
 	return decodeStruct(elem, m)
 }
 
-// decodeStruct uses reflection (with cached metadata) to assign values from the decoded map.
 func decodeStruct(v reflect.Value, data map[string]any) error {
 	fields := getStructFields(v.Type())
 	for _, info := range fields {
@@ -478,137 +492,193 @@ func assignValue(fv reflect.Value, raw any) error {
 	return nil
 }
 
-var bufPool = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
+// encoder is a zero‑allocation JSON encoder that writes into an internal byte slice.
+type encoder struct {
+	buf []byte
 }
 
+// newEncoder creates a new encoder with an initial capacity.
+func newEncoder() *encoder {
+	// preallocate with a reasonable capacity to avoid many resizes.
+	return &encoder{buf: make([]byte, 0, 1024)}
+}
+
+// Marshal encodes v into JSON without creating intermediate allocations.
 func Marshal(v any) ([]byte, error) {
-	if v == nil {
-		return []byte("null"), nil
+	enc := newEncoder()
+	if err := enc.encode(v); err != nil {
+		return nil, err
 	}
+	return enc.buf, nil
+}
+
+// encode dispatches encoding based on type.
+func (e *encoder) encode(v any) error {
 	switch vv := v.(type) {
+	case nil:
+		e.writeString("null")
 	case string:
-		return []byte(fmt.Sprintf(`"%s"`, escapeString(vv))), nil
+		e.writeByte('"')
+		e.encodeString(vv)
+		e.writeByte('"')
 	case float64:
-		return []byte(strconv.FormatFloat(vv, 'f', -1, 64)), nil
+		e.buf = strconv.AppendFloat(e.buf, vv, 'f', -1, 64)
 	case int:
-		return []byte(strconv.Itoa(vv)), nil
+		e.buf = strconv.AppendInt(e.buf, int64(vv), 10)
 	case bool:
 		if vv {
-			return []byte("true"), nil
+			e.writeString("true")
+		} else {
+			e.writeString("false")
 		}
-		return []byte("false"), nil
 	case map[string]any:
-		return marshalMap(vv)
+		return e.encodeMap(vv)
 	case []any:
-		return marshalSlice(vv)
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Slice, reflect.Array:
-		return marshalReflectSlice(rv)
-	case reflect.Struct:
-		m := structToMap(rv)
-		return Marshal(m)
+		return e.encodeSlice(vv)
 	default:
-		return nil, fmt.Errorf("unsupported type for marshal: %T", v)
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array:
+			return e.encodeReflectSlice(rv)
+		case reflect.Struct:
+			return e.encodeStruct(rv)
+		default:
+			return fmt.Errorf("unsupported type for marshal: %T", v)
+		}
 	}
+	return nil
 }
 
-func marshalMap(m map[string]any) ([]byte, error) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-	buf.WriteByte('{')
+// encodeMap encodes a map[string]any.
+func (e *encoder) encodeMap(m map[string]any) error {
+	e.writeByte('{')
 	first := true
 	for k, val := range m {
 		if !first {
-			buf.WriteByte(',')
+			e.writeByte(',')
 		}
 		first = false
-		buf.WriteString(fmt.Sprintf(`"%s":`, escapeString(k)))
-		b, err := Marshal(val)
-		if err != nil {
-			return nil, err
+		e.writeByte('"')
+		e.encodeString(k)
+		e.writeByte('"')
+		e.writeByte(':')
+		if err := e.encode(val); err != nil {
+			return err
 		}
-		buf.Write(b)
 	}
-	buf.WriteByte('}')
-	return buf.Bytes(), nil
+	e.writeByte('}')
+	return nil
 }
 
-func marshalSlice(s []any) ([]byte, error) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-	buf.WriteByte('[')
+// encodeSlice encodes a []any slice.
+func (e *encoder) encodeSlice(s []any) error {
+	e.writeByte('[')
 	for i, val := range s {
 		if i > 0 {
-			buf.WriteByte(',')
+			e.writeByte(',')
 		}
-		b, err := Marshal(val)
-		if err != nil {
-			return nil, err
+		if err := e.encode(val); err != nil {
+			return err
 		}
-		buf.Write(b)
 	}
-	buf.WriteByte(']')
-	return buf.Bytes(), nil
+	e.writeByte(']')
+	return nil
 }
 
-func marshalReflectSlice(rv reflect.Value) ([]byte, error) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-	buf.WriteByte('[')
-	for i := 0; i < rv.Len(); i++ {
+// encodeReflectSlice encodes any slice/array via reflection.
+func (e *encoder) encodeReflectSlice(rv reflect.Value) error {
+	e.writeByte('[')
+	n := rv.Len()
+	for i := 0; i < n; i++ {
 		if i > 0 {
-			buf.WriteByte(',')
+			e.writeByte(',')
 		}
-		b, err := Marshal(rv.Index(i).Interface())
-		if err != nil {
-			return nil, err
+		if err := e.encode(rv.Index(i).Interface()); err != nil {
+			return err
 		}
-		buf.Write(b)
 	}
-	buf.WriteByte(']')
-	return buf.Bytes(), nil
+	e.writeByte(']')
+	return nil
 }
 
-func structToMap(v reflect.Value) map[string]any {
-	fields := getStructFields(v.Type())
-	m := make(map[string]any, len(fields))
-	for _, info := range fields {
-		fv := v.FieldByIndex(info.index)
-		m[info.name] = fv.Interface()
+// encodeStruct encodes a struct by iterating over its exported fields.
+// It uses the "json" tag if present.
+func (e *encoder) encodeStruct(rv reflect.Value) error {
+	e.writeByte('{')
+	rt := rv.Type()
+	first := true
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		// skip unexported fields.
+		if field.PkgPath != "" {
+			continue
+		}
+		if !first {
+			e.writeByte(',')
+		}
+		first = false
+		// use the JSON tag if available.
+		key := field.Name
+		if tag := field.Tag.Get("json"); tag != "" {
+			parts := strings.Split(tag, ",")
+			if parts[0] != "" {
+				key = parts[0]
+			}
+		}
+		e.writeByte('"')
+		e.encodeString(key)
+		e.writeByte('"')
+		e.writeByte(':')
+		if err := e.encode(rv.Field(i).Interface()); err != nil {
+			return fmt.Errorf("field %q: %w", key, err)
+		}
 	}
-	return m
+	e.writeByte('}')
+	return nil
 }
 
-func escapeString(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
+// encodeString writes a JSON-escaped string (without the surrounding quotes).
+func (e *encoder) encodeString(s string) {
+	start := 0
+	// scan for characters that need escaping.
 	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			b.WriteString(`\\`)
-		case '"':
-			b.WriteString(`\"`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\t':
-			b.WriteString(`\t`)
-		case '\r':
-			b.WriteString(`\r`)
-		default:
-			b.WriteByte(s[i])
+		c := s[i]
+		// escape backslash, quote, or control characters (< 0x20).
+		if c == '\\' || c == '"' || c < 0x20 {
+			if start < i {
+				e.writeString(s[start:i])
+			}
+			switch c {
+			case '\\', '"':
+				e.writeByte('\\')
+				e.writeByte(c)
+			case '\n':
+				e.writeString(`\n`)
+			case '\r':
+				e.writeString(`\r`)
+			case '\t':
+				e.writeString(`\t`)
+			default:
+				// format control characters as \u00XX.
+				e.writeString(`\u00`)
+				hex := "0123456789abcdef"
+				e.writeByte(hex[c>>4])
+				e.writeByte(hex[c&0xF])
+			}
+			start = i + 1
 		}
 	}
-	return b.String()
+	if start < len(s) {
+		e.writeString(s[start:])
+	}
 }
 
-func Decode(data []byte) (any, error) {
-	d := newDecoder(data)
-	d.skipWhitespace()
-	return d.decodeValue()
+// writeByte appends a single byte to the buffer.
+func (e *encoder) writeByte(b byte) {
+	e.buf = append(e.buf, b)
+}
+
+// writeString appends a string to the buffer.
+func (e *encoder) writeString(s string) {
+	e.buf = append(e.buf, s...)
 }
