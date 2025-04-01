@@ -1,6 +1,5 @@
 package v2
 
-// https://gist.github.com/oarkflow/d7f3c2bbefe1ff179e3ea213f0403793
 import (
 	"crypto/sha256"
 	"encoding/base64"
@@ -26,7 +25,6 @@ import (
 	"github.com/oarkflow/expr"
 )
 
-// Add convertValue helper function to convert extracted values based on schema type.
 func convertValue(val any, expectedType string) (any, error) {
 	switch expectedType {
 	case "number":
@@ -667,6 +665,68 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Properties = &sMap
 		}
 	}
+
+	if schema.Properties != nil {
+		for key, prop := range *schema.Properties {
+			if prop.In != nil && *prop.In != "" {
+				found := false
+				for _, req := range schema.Required {
+					if req == key {
+						found = true
+						break
+					}
+				}
+				if !found {
+					schema.Required = append(schema.Required, key)
+				}
+			}
+		}
+	}
+
+	if ifVal, ok := m["if"]; ok {
+		if thenVal, ok2 := m["then"]; ok2 {
+
+			if ifMap, ok := ifVal.(map[string]any); ok {
+				if reqArr, ok := ifMap["required"].([]any); ok {
+					for _, reqKey := range reqArr {
+						if key, ok := reqKey.(string); ok {
+
+							if thenMap, ok := thenVal.(map[string]any); ok {
+								if thenProps, ok := thenMap["properties"].(map[string]any); ok {
+									if mod, exists := thenProps[key]; exists {
+										if modMap, ok := mod.(map[string]any); ok {
+											if reqFields, ok := modMap["required"].([]any); ok {
+
+												if schema.Properties != nil {
+													if propSchema, exists := (*schema.Properties)[key]; exists {
+														for _, field := range reqFields {
+															if strField, ok := field.(string); ok {
+																found := false
+																for _, r := range propSchema.Required {
+																	if r == strField {
+																		found = true
+																		break
+																	}
+																}
+																if !found {
+																	propSchema.Required = append(propSchema.Required, strField)
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if patProps, exists := m["patternProperties"]; exists {
 		if patMap, ok := patProps.(map[string]any); ok {
 			sMap := SchemaMap{}
@@ -905,7 +965,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
-	// Handle additional fields "in" and "field"
+
 	if inVal, exists := m["in"]; exists {
 		if inStr, ok := inVal.(string); ok {
 			schema.In = &inStr
@@ -1962,13 +2022,11 @@ func selfValidateSchema(schema *Schema) error {
 			if schema.Title != nil && *schema.Title == "" {
 				return errors.New("meta-data: title must not be empty")
 			}
-
 		}
 	}
 	return nil
 }
 
-// Add helper function to retrieve nested values using dot‑notation.
 func getNestedValue(m map[string]any, field string) (any, bool) {
 	parts := strings.Split(field, ".")
 	var value any = m
@@ -1985,7 +2043,6 @@ func getNestedValue(m map[string]any, field string) (any, bool) {
 	return value, true
 }
 
-// Modified extractDataFromRequest with deep nesting support.
 func extractDataFromRequest(r *http.Request, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
 	case "query":
@@ -2011,7 +2068,6 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 		}
 		return m, nil
 	case "params":
-		// Assuming params are stored in context under the key "params"
 		if params, ok := r.Context().Value("params").(map[string]string); ok {
 			m := map[string]any{}
 			for k, v := range params {
@@ -2034,7 +2090,6 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 		return nil, fmt.Errorf("no params found in context")
 	case "header":
 		m := map[string]any{}
-		// Iterate over the headers.
 		for k, v := range r.Header {
 			if len(v) == 1 {
 				m[k] = v[0]
@@ -2062,7 +2117,6 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 		if err != nil {
 			return nil, fmt.Errorf("failed to read request body: %v", err)
 		}
-		// Reset r.Body for further use
 		r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 		var data any
 		if err := json.Unmarshal(bodyBytes, &data); err != nil {
@@ -2087,10 +2141,8 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 	}
 }
 
-// UnmarshalRequest validates and unmarshals data from an http.Request according to the Schema’s "In" and "Field" properties.
 func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 	var data any
-	// If top-level schema is an object with properties, merge the body with property-level extraction.
 	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
 		bodyData, err := extractDataFromRequest(r, "body", nil)
 		if err != nil {
@@ -2100,28 +2152,7 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 		if !ok {
 			m = map[string]any{}
 		}
-		// For each property specifying a non-body source, override its value.
-		for key, propSchema := range *s.Properties {
-			if propSchema.In != nil && *propSchema.In != "body" {
-				fieldName := key
-				if propSchema.Field != nil && *propSchema.Field != "" {
-					fieldName = *propSchema.Field
-				}
-				// Extract from request using the property schema's In value.
-				val, err := extractDataFromRequest(r, *propSchema.In, &fieldName)
-				if err == nil {
-					if len(propSchema.Type) > 0 {
-						conv, err := convertValue(val, propSchema.Type[0])
-						if err != nil {
-							return fmt.Errorf("failed to convert field %s: %v", key, err)
-						}
-						m[key] = conv
-					} else {
-						m[key] = val
-					}
-				}
-			}
-		}
+		overrideFromRequest(r, m, s)
 		data = m
 	} else {
 		in := "body"
@@ -2148,7 +2179,34 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 	return nil
 }
 
-// UnmarshalAndValidateRequest compiles the schema and then extracts, validates, and unmarshals data from the http.Request into dest.
+func overrideFromRequest(r *http.Request, data map[string]any, schema *Schema) {
+	for key, propSchema := range *schema.Properties {
+		if propSchema.In != nil && *propSchema.In != "body" {
+			fieldName := key
+			if propSchema.Field != nil && *propSchema.Field != "" {
+				fieldName = *propSchema.Field
+			}
+			if val, err := extractDataFromRequest(r, *propSchema.In, &fieldName); err == nil {
+				if len(propSchema.Type) > 0 {
+					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
+						data[key] = conv
+					}
+				} else {
+					data[key] = val
+				}
+			}
+		}
+		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {
+			nested, ok := data[key].(map[string]any)
+			if !ok {
+				nested = map[string]any{}
+				data[key] = nested
+			}
+			overrideFromRequest(r, nested, propSchema)
+		}
+	}
+}
+
 func UnmarshalAndValidateRequest(r *http.Request, dest any, schemaBytes []byte) error {
 	compiler := NewCompiler()
 	schema, err := compiler.Compile(schemaBytes)
@@ -2158,7 +2216,6 @@ func UnmarshalAndValidateRequest(r *http.Request, dest any, schemaBytes []byte) 
 	return schema.UnmarshalRequest(r, dest)
 }
 
-// Ctx mimics the fiber.Ctx interface.
 type Ctx interface {
 	Params(key string) string
 	Query(key string) string
@@ -2167,12 +2224,10 @@ type Ctx interface {
 	BodyParser(dest interface{}) error
 }
 
-// Modified extractDataFromFiberCtx with deep nesting support.
 func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
 	case "header":
 		if field != nil && *field != "" {
-			// For fiber, assume header value is a string.
 			return ctx.Get(*field), nil
 		}
 		return nil, errors.New("for header extraction, a field name must be provided")
@@ -2182,7 +2237,6 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 			if val != "" {
 				return val, nil
 			}
-			// Attempt deep extraction if field contains dots.
 			var m map[string]any
 			if err := json.Unmarshal([]byte(ctx.Query("")), &m); err == nil && strings.Contains(*field, ".") {
 				if v, exists := getNestedValue(m, *field); exists {
@@ -2198,7 +2252,6 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 			if val != "" {
 				return val, nil
 			}
-			// If dot notation is used, attempt deep extraction (if supported).
 			var m map[string]any
 			if strings.Contains(*field, ".") {
 				if v, exists := getNestedValue(m, *field); exists {
@@ -2236,7 +2289,6 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 	}
 }
 
-// UnmarshalFiberCtx validates and unmarshal data from a fiber‑style context based on the Schema’s "in" and "field" properties.
 func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 	var data any
 	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
@@ -2248,26 +2300,7 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 		if !ok {
 			m = map[string]any{}
 		}
-		for key, propSchema := range *s.Properties {
-			if propSchema.In != nil && *propSchema.In != "body" {
-				fieldName := key
-				if propSchema.Field != nil && *propSchema.Field != "" {
-					fieldName = *propSchema.Field
-				}
-				val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName)
-				if err == nil {
-					if len(propSchema.Type) > 0 {
-						conv, err := convertValue(val, propSchema.Type[0])
-						if err != nil {
-							return fmt.Errorf("failed to convert field %s: %v", key, err)
-						}
-						m[key] = conv
-					} else {
-						m[key] = val
-					}
-				}
-			}
-		}
+		overrideFromFiberCtx(ctx, m, s)
 		data = m
 	} else {
 		in := "body"
@@ -2292,4 +2325,32 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 		return err
 	}
 	return nil
+}
+
+func overrideFromFiberCtx(ctx Ctx, data map[string]any, schema *Schema) {
+	for key, propSchema := range *schema.Properties {
+		if propSchema.In != nil && *propSchema.In != "body" {
+			fieldName := key
+			if propSchema.Field != nil && *propSchema.Field != "" {
+				fieldName = *propSchema.Field
+			}
+			if val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName); err == nil {
+				if len(propSchema.Type) > 0 {
+					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
+						data[key] = conv
+					}
+				} else {
+					data[key] = val
+				}
+			}
+		}
+		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {
+			nested, ok := data[key].(map[string]any)
+			if !ok {
+				nested = map[string]any{}
+				data[key] = nested
+			}
+			overrideFromFiberCtx(ctx, nested, propSchema)
+		}
+	}
 }
