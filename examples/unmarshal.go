@@ -39,7 +39,7 @@ var complexJSON = []byte(`{
 	}`)
 
 func main() {
-	var result any
+	var result T
 	if err := jsonmap.Unmarshal(complexJSON, &result); err != nil {
 		panic(err)
 	}

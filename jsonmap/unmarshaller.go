@@ -27,10 +27,6 @@ type decoder struct {
 	options DecoderOptions
 }
 
-func newDecoder(data []byte, opts DecoderOptions) *decoder {
-	return &decoder{data: data, pos: 0, len: len(data), options: opts}
-}
-
 func (d *decoder) errorf(msg string) error {
 	if d.options.WithErrorContext {
 		return fmt.Errorf("%s at pos %d", msg, d.pos)
@@ -315,14 +311,27 @@ func Unmarshal(data []byte, v any) error {
 	return UnmarshalWithOptions(data, v, DecoderOptions{})
 }
 
+var decoderPool = sync.Pool{
+	New: func() any { return &decoder{} },
+}
+
+func getPooledDecoder(data []byte, opts DecoderOptions) *decoder {
+	d := decoderPool.Get().(*decoder)
+	d.data = data
+	d.pos = 0
+	d.len = len(data)
+	d.options = opts
+	return d
+}
+
 func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	if v == nil {
 		return errors.New("nil target provided")
 	}
-
 	switch target := v.(type) {
 	case *map[string]any:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		d.skipWhitespace()
 		obj, err := d.decodeObject()
 		if err != nil {
@@ -331,7 +340,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = obj
 		return nil
 	case *[]map[string]any:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		d.skipWhitespace()
 		arrRaw, err := d.decodeArray()
 		if err != nil {
@@ -348,7 +358,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = out
 		return nil
 	case *string:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		s, err := d.decodeString()
 		if err != nil {
 			return err
@@ -356,7 +367,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = s
 		return nil
 	case *float64:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -364,7 +376,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = n
 		return nil
 	case *int:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		n, err := d.decodeNumber()
 		if err != nil {
 			return err
@@ -372,7 +385,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = int(n)
 		return nil
 	case *bool:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		b, err := d.decodeBool()
 		if err != nil {
 			return err
@@ -380,7 +394,8 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		*target = b
 		return nil
 	case *interface{}:
-		d := newDecoder(data, opts)
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
 		d.skipWhitespace()
 		val, err := d.decodeValue()
 		if err != nil {
@@ -394,18 +409,134 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return errors.New("target must be a non-nil pointer")
 	}
-	elem := rv.Elem()
-	if elem.Kind() != reflect.Struct {
-		return fmt.Errorf("unsupported type: %T", v)
-	}
 
-	d := newDecoder(data, opts)
-	d.skipWhitespace()
-	m, err := d.decodeObject()
-	if err != nil {
-		return err
+	if rv.Elem().Kind() == reflect.Struct {
+		d := getPooledDecoder(data, opts)
+		defer decoderPool.Put(d)
+		d.skipWhitespace()
+		return directDecodeStruct(d, rv.Elem())
 	}
-	return decodeStruct(elem, m)
+	return fmt.Errorf("unsupported type: %T", v)
+}
+
+func directDecodeStruct(d *decoder, v reflect.Value) error {
+	if d.pos >= d.len || d.data[d.pos] != '{' {
+		return d.errorf("expected '{' at beginning of object")
+	}
+	d.pos++
+	d.skipWhitespace()
+
+	fields := getStructFields(v.Type())
+	fieldMap := make(map[string]fieldInfo, len(fields))
+	for _, fi := range fields {
+		fieldMap[fi.name] = fi
+	}
+	first := true
+	for {
+		d.skipWhitespace()
+		if d.pos < d.len && d.data[d.pos] == '}' {
+			d.pos++
+			break
+		}
+		if !first {
+			if d.data[d.pos] != ',' {
+				return d.errorf("expected ',' between object fields")
+			}
+			d.pos++
+			d.skipWhitespace()
+		}
+		first = false
+
+		key, err := d.decodeString()
+		if err != nil {
+			return err
+		}
+		d.skipWhitespace()
+		if d.pos >= d.len || d.data[d.pos] != ':' {
+			return d.errorf("expected ':' after object key")
+		}
+		d.pos++
+		d.skipWhitespace()
+		if fi, ok := fieldMap[key]; ok {
+			fv := v.FieldByIndex(fi.index)
+			if !fv.CanSet() {
+
+				if _, err := d.decodeValue(); err != nil {
+					return err
+				}
+			} else {
+				if err := decodeValueDirect(d, fv); err != nil {
+					return fmt.Errorf("field %q: %w", key, err)
+				}
+			}
+		} else {
+
+			if _, err := d.decodeValue(); err != nil {
+				return err
+			}
+		}
+		d.skipWhitespace()
+	}
+	return nil
+}
+
+func decodeValueDirect(d *decoder, v reflect.Value) error {
+	switch v.Kind() {
+	case reflect.String:
+		s, err := d.decodeString()
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	case reflect.Float64:
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		v.SetFloat(n)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		v.SetInt(int64(n))
+	case reflect.Bool:
+		b, err := d.decodeBool()
+		if err != nil {
+			return err
+		}
+		v.SetBool(b)
+	case reflect.Struct:
+		return directDecodeStruct(d, v)
+	case reflect.Slice:
+		arr, err := d.decodeArray()
+		if err != nil {
+			return err
+		}
+		slice := reflect.MakeSlice(v.Type(), len(arr), len(arr))
+		for i := 0; i < len(arr); i++ {
+			if err := assignValue(slice.Index(i), arr[i]); err != nil {
+				return fmt.Errorf("index %d: %w", i, err)
+			}
+		}
+		v.Set(slice)
+	case reflect.Ptr:
+		ptrVal := reflect.New(v.Type().Elem())
+		if err := decodeValueDirect(d, ptrVal.Elem()); err != nil {
+			return err
+		}
+		v.Set(ptrVal)
+	default:
+
+		val, err := d.decodeValue()
+		if err != nil {
+			return err
+		}
+		if err := assignValue(v, val); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func decodeStruct(v reflect.Value, data map[string]any) error {
