@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	goccy "github.com/goccy/go-json"
+
+	"github.com/oarkflow/json/jsonparser"
 )
 
 type Custom struct {
@@ -56,6 +58,38 @@ func BenchmarkCustomUnmarshal(b *testing.B) {
 		var result T
 		if err := Unmarshal(complexJSON, &result); err != nil {
 			b.Fatalf("custom Unmarshal error: %v", err)
+		}
+	}
+}
+
+func BenchmarkCustomGet(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if _, err := Get(complexJSON, "key3"); err != nil {
+			b.Fatalf("custom Get error: %v", err)
+		}
+	}
+}
+
+func BenchmarkCustomSet(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if _, err := Set(complexJSON, "key3", "test"); err != nil {
+			b.Fatalf("custom Set error: %v", err)
+		}
+	}
+}
+
+func BenchmarkJSONParserGet(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if _, _, _, err := jsonparser.Get(complexJSON, "key3"); err != nil {
+			b.Fatalf("jsonparser Get error: %v", err)
+		}
+	}
+}
+
+func BenchmarkJSONParserSet(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if _, err := jsonparser.Set(complexJSON, []byte("test"), "key3"); err != nil {
+			b.Fatalf("jsonparser Set error: %v", err)
 		}
 	}
 }

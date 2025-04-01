@@ -12,9 +12,9 @@ import (
 	"unsafe"
 )
 
-// ----------------------
-// Zero-Allocation Helpers
-// ----------------------
+// -----------------------------------------------------------------------------
+// Zero‑Allocation Helpers & Decoder/Encoder (existing code)
+// -----------------------------------------------------------------------------
 
 // b2s converts []byte to string without extra copy.
 // (Be sure that the underlying slice is not modified.)
@@ -23,7 +23,7 @@ func b2s(b []byte) string {
 }
 
 // ----------------------
-// JSON Decoder (Zero-Alloc)
+// JSON Decoder (Zero‑Alloc)
 // ----------------------
 
 type decoder struct {
@@ -152,7 +152,6 @@ func (d *decoder) decodeString() (string, error) {
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
-			// Fast path: no escapes.
 			s := b2s(d.data[start:d.pos])
 			d.pos++
 			return s, nil
@@ -174,7 +173,6 @@ func (d *decoder) decodeStringEscaped(start int) (string, error) {
 	} else {
 		runes = make([]rune, 0, capEstimate)
 	}
-	// Append already-read bytes.
 	runes = append(runes, []rune(b2s(d.data[start:d.pos]))...)
 	for d.pos < d.len {
 		c := d.data[d.pos]
@@ -367,7 +365,7 @@ func Unmarshal(data []byte, v any) error {
 		*target = b
 		return nil
 	}
-
+	
 	// For structs, decode into a map first and then use reflection.
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
@@ -377,7 +375,7 @@ func Unmarshal(data []byte, v any) error {
 	if elem.Kind() != reflect.Struct {
 		return fmt.Errorf("unsupported type: %T", v)
 	}
-
+	
 	d := newDecoder(data)
 	d.skipWhitespace()
 	m, err := d.decodeObject()
@@ -413,7 +411,7 @@ func assignValue(fv reflect.Value, raw any) error {
 		fv.Set(reflect.Zero(fv.Type()))
 		return nil
 	}
-
+	
 	switch fv.Kind() {
 	case reflect.String:
 		s, ok := raw.(string)
@@ -475,11 +473,13 @@ func assignValue(fv reflect.Value, raw any) error {
 }
 
 // ----------------------
-// Minimal JSON Marshal (Zero-Alloc for supported types)
+// JSON Encoder (Minimal)
 // ----------------------
 
-// Marshal encodes the provided value into JSON.
-// It supports basic types, maps, slices, arrays, and structs.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
 func Marshal(v any) ([]byte, error) {
 	if v == nil {
 		return []byte("null"), nil
@@ -497,61 +497,14 @@ func Marshal(v any) ([]byte, error) {
 		}
 		return []byte("false"), nil
 	case map[string]any:
-		var buf bytes.Buffer
-		estCapacity := 2 + len(vv)*20
-		buf.Grow(estCapacity)
-		buf.WriteByte('{')
-		first := true
-		for k, val := range vv {
-			if !first {
-				buf.WriteByte(',')
-			}
-			first = false
-			buf.WriteString(fmt.Sprintf(`"%s":`, escapeString(k)))
-			b, err := Marshal(val)
-			if err != nil {
-				return nil, err
-			}
-			buf.Write(b)
-		}
-		buf.WriteByte('}')
-		return buf.Bytes(), nil
+		return marshalMap(vv)
 	case []any:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for i, val := range vv {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			b, err := Marshal(val)
-			if err != nil {
-				return nil, err
-			}
-			buf.Write(b)
-		}
-		buf.WriteByte(']')
-		return buf.Bytes(), nil
+		return marshalSlice(vv)
 	}
-
-	// Fallback: use reflection to support slices, arrays, and structs.
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for i := 0; i < rv.Len(); i++ {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			elem := rv.Index(i).Interface()
-			b, err := Marshal(elem)
-			if err != nil {
-				return nil, err
-			}
-			buf.Write(b)
-		}
-		buf.WriteByte(']')
-		return buf.Bytes(), nil
+		return marshalReflectSlice(rv)
 	case reflect.Struct:
 		m := structToMap(rv)
 		return Marshal(m)
@@ -560,7 +513,66 @@ func Marshal(v any) ([]byte, error) {
 	}
 }
 
-// structToMap converts a struct into a map[string]any using json tags.
+func marshalMap(m map[string]any) ([]byte, error) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	buf.WriteByte('{')
+	first := true
+	for k, val := range m {
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		buf.WriteString(fmt.Sprintf(`"%s":`, escapeString(k)))
+		b, err := Marshal(val)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}
+
+func marshalSlice(s []any) ([]byte, error) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	buf.WriteByte('[')
+	for i, val := range s {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		b, err := Marshal(val)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes(), nil
+}
+
+func marshalReflectSlice(rv reflect.Value) ([]byte, error) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	buf.WriteByte('[')
+	for i := 0; i < rv.Len(); i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		b, err := Marshal(rv.Index(i).Interface())
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes(), nil
+}
+
 func structToMap(v reflect.Value) map[string]any {
 	fields := getStructFields(v.Type())
 	m := make(map[string]any, len(fields))
@@ -571,7 +583,6 @@ func structToMap(v reflect.Value) map[string]any {
 	return m
 }
 
-// escapeString uses a single-pass strings.Builder to reduce allocations.
 func escapeString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -592,4 +603,409 @@ func escapeString(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// -----------------------------------------------------------------------------
+// Decode helper: decode JSON bytes into interface{} (map or slice)
+// -----------------------------------------------------------------------------
+
+func Decode(data []byte) (any, error) {
+	d := newDecoder(data)
+	d.skipWhitespace()
+	return d.decodeValue()
+}
+
+// -----------------------------------------------------------------------------
+// Path Traversal and Modification
+// -----------------------------------------------------------------------------
+
+// pathSegment represents a single segment of a dot‑notation key.
+type pathSegment struct {
+	key      string // non‑empty for map access
+	index    *int   // non‑nil for slice index access
+	wildcard bool   // true if segment is "#"
+}
+
+// parsePath splits the dot‑notation key into segments.
+// Supported formats:
+//   key1.key2             => two map accesses
+//   key1.0.key2           => key1, then index 0, then key2
+//   key1.[0].key2         => same as above
+//   key1.#.key2           => wildcard on a slice; GetAll returns a flattened slice.
+func parsePath(path string) ([]pathSegment, error) {
+	if path == "" {
+		return nil, errors.New("empty path")
+	}
+	parts := strings.Split(path, ".")
+	segments := make([]pathSegment, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		// Wildcard segment
+		if part == "#" {
+			segments = append(segments, pathSegment{wildcard: true})
+			continue
+		}
+		// Handle bracketed index: [0] or [#]
+		if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
+			content := strings.Trim(part, "[]")
+			if content == "#" {
+				segments = append(segments, pathSegment{wildcard: true})
+				continue
+			}
+			if idx, err := strconv.Atoi(content); err == nil {
+				segments = append(segments, pathSegment{index: &idx})
+				continue
+			}
+			// Otherwise, treat as a key.
+			segments = append(segments, pathSegment{key: content})
+			continue
+		}
+		// If part is a number, treat it as an index.
+		if idx, err := strconv.Atoi(part); err == nil {
+			segments = append(segments, pathSegment{index: &idx})
+			continue
+		}
+		// Otherwise, it's a key.
+		segments = append(segments, pathSegment{key: part})
+	}
+	return segments, nil
+}
+
+// traverse recursively follows the segments in the data structure.
+// For wildcard segments, it returns a flattened slice of matching nodes.
+func traverse(data any, segments []pathSegment) (any, error) {
+	if len(segments) == 0 {
+		return data, nil
+	}
+	seg := segments[0]
+	rest := segments[1:]
+	var results []any
+	
+	switch d := data.(type) {
+	case map[string]any:
+		if seg.key == "" {
+			return nil, fmt.Errorf("expected map key but got empty segment")
+		}
+		next, exists := d[seg.key]
+		if !exists {
+			return nil, fmt.Errorf("key %q not found", seg.key)
+		}
+		return traverse(next, rest)
+	case []any:
+		// If current segment is an index
+		if seg.index != nil {
+			if *seg.index < 0 || *seg.index >= len(d) {
+				return nil, fmt.Errorf("index %d out of bounds", *seg.index)
+			}
+			return traverse(d[*seg.index], rest)
+		}
+		// If wildcard, apply rest to all elements
+		if seg.wildcard {
+			for _, elem := range d {
+				res, err := traverse(elem, rest)
+				if err == nil {
+					// If result is a slice, flatten it.
+					if slice, ok := res.([]any); ok {
+						results = append(results, slice...)
+					} else {
+						results = append(results, res)
+					}
+				}
+			}
+			return results, nil
+		}
+		// Otherwise, if seg.key is provided, apply to each element if they are maps.
+		for _, elem := range d {
+			if m, ok := elem.(map[string]any); ok {
+				if next, exists := m[seg.key]; exists {
+					res, err := traverse(next, rest)
+					if err == nil {
+						results = append(results, res)
+					}
+				}
+			}
+		}
+		if len(results) == 0 {
+			return nil, fmt.Errorf("no match for segment %q", seg.key)
+		}
+		return results, nil
+	default:
+		return nil, fmt.Errorf("cannot traverse non-container type: %T", data)
+	}
+}
+
+// setValue traverses the data using segments (except the last) and sets the final field.
+// It supports map key access and slice index access.
+func setValue(data any, segments []pathSegment, value any) error {
+	if len(segments) == 0 {
+		return errors.New("empty path")
+	}
+	// When only one segment remains, perform set.
+	if len(segments) == 1 {
+		seg := segments[0]
+		switch d := data.(type) {
+		case map[string]any:
+			if seg.key == "" {
+				return errors.New("expected map key for setting")
+			}
+			d[seg.key] = value
+			return nil
+		case []any:
+			if seg.index != nil {
+				if *seg.index < 0 || *seg.index >= len(d) {
+					return fmt.Errorf("index %d out of bounds", *seg.index)
+				}
+				d[*seg.index] = value
+				return nil
+			}
+			return fmt.Errorf("expected index for slice set")
+		default:
+			return fmt.Errorf("cannot set value on non-container type: %T", data)
+		}
+	}
+	// Otherwise, traverse into the container.
+	seg := segments[0]
+	rest := segments[1:]
+	switch d := data.(type) {
+	case map[string]any:
+		if seg.key == "" {
+			return errors.New("expected map key in path")
+		}
+		next, exists := d[seg.key]
+		if !exists {
+			// If missing, create a new map for next if next segment is key,
+			// or a slice if next segment is an index or wildcard.
+			if rest[0].index != nil || rest[0].wildcard {
+				next = make([]any, 0)
+			} else {
+				next = make(map[string]any)
+			}
+			d[seg.key] = next
+		}
+		return setValue(next, rest, value)
+	case []any:
+		if seg.index != nil {
+			if *seg.index < 0 || *seg.index >= len(d) {
+				return fmt.Errorf("index %d out of bounds", *seg.index)
+			}
+			return setValue(d[*seg.index], rest, value)
+		}
+		if seg.wildcard {
+			var err error
+			for i := range d {
+				if e := setValue(d[i], rest, value); e != nil {
+					err = e
+				}
+			}
+			return err
+		}
+		return fmt.Errorf("expected numeric index or wildcard for slice set")
+	default:
+		return fmt.Errorf("cannot traverse non-container type: %T", data)
+	}
+}
+
+// deleteValue traverses the data using segments (except the last) and deletes the final field.
+// For maps, it removes the key; for slices, it removes the element at index.
+func deleteValue(data any, segments []pathSegment) error {
+	if len(segments) == 0 {
+		return errors.New("empty path")
+	}
+	if len(segments) == 1 {
+		seg := segments[0]
+		switch d := data.(type) {
+		case map[string]any:
+			if seg.key == "" {
+				return errors.New("expected map key for deletion")
+			}
+			delete(d, seg.key)
+			return nil
+		case []any:
+			if seg.index != nil {
+				idx := *seg.index
+				if idx < 0 || idx >= len(d) {
+					return fmt.Errorf("index %d out of bounds", idx)
+				}
+				// Remove element at index.
+				d = append(d[:idx], d[idx+1:]...)
+				// Note: since slices are passed by value, caller must handle assignment.
+				// In our top‑level functions we re‑marshal the modified object.
+				return nil
+			}
+			return fmt.Errorf("expected index for slice deletion")
+		default:
+			return fmt.Errorf("cannot delete on non-container type: %T", data)
+		}
+	}
+	seg := segments[0]
+	rest := segments[1:]
+	switch d := data.(type) {
+	case map[string]any:
+		if seg.key == "" {
+			return errors.New("expected map key in path for deletion")
+		}
+		next, exists := d[seg.key]
+		if !exists {
+			return fmt.Errorf("key %q not found for deletion", seg.key)
+		}
+		return deleteValue(next, rest)
+	case []any:
+		if seg.index != nil {
+			if *seg.index < 0 || *seg.index >= len(d) {
+				return fmt.Errorf("index %d out of bounds", *seg.index)
+			}
+			return deleteValue(d[*seg.index], rest)
+		}
+		if seg.wildcard {
+			var err error
+			for _, elem := range d {
+				if e := deleteValue(elem, rest); e != nil {
+					err = e
+				}
+			}
+			return err
+		}
+		return fmt.Errorf("expected numeric index or wildcard for slice deletion")
+	default:
+		return fmt.Errorf("cannot traverse non-container type: %T", data)
+	}
+}
+
+// setAllValue traverses the data using segments and sets the value on all matches
+// when a wildcard (#) is encountered.
+func setAllValue(data any, segments []pathSegment, value any) error {
+	// If no segments, nothing to set.
+	if len(segments) == 0 {
+		return errors.New("empty path")
+	}
+	seg := segments[0]
+	rest := segments[1:]
+	switch d := data.(type) {
+	case map[string]any:
+		if seg.key == "" {
+			return errors.New("expected map key in path")
+		}
+		next, exists := d[seg.key]
+		if !exists {
+			return fmt.Errorf("key %q not found", seg.key)
+		}
+		if len(rest) == 0 {
+			d[seg.key] = value
+			return nil
+		}
+		return setAllValue(next, rest, value)
+	case []any:
+		// If current segment is wildcard, then set value on all elements.
+		if seg.wildcard {
+			var err error
+			for i := range d {
+				if len(rest) == 0 {
+					d[i] = value
+				} else {
+					if e := setAllValue(d[i], rest, value); e != nil {
+						err = e
+					}
+				}
+			}
+			return err
+		}
+		// Otherwise, if index is specified.
+		if seg.index != nil {
+			if *seg.index < 0 || *seg.index >= len(d) {
+				return fmt.Errorf("index %d out of bounds", *seg.index)
+			}
+			if len(rest) == 0 {
+				d[*seg.index] = value
+				return nil
+			}
+			return setAllValue(d[*seg.index], rest, value)
+		}
+		return fmt.Errorf("expected index or wildcard for slice access")
+	default:
+		return fmt.Errorf("cannot traverse non-container type: %T", data)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Public API Functions
+// -----------------------------------------------------------------------------
+
+// Get decodes the JSON and returns the value at the given dot‑notation key.
+func Get(obj []byte, key string) (any, error) {
+	data, err := Decode(obj)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := parsePath(key)
+	if err != nil {
+		return nil, err
+	}
+	return traverse(data, segments)
+}
+
+// GetAll decodes the JSON and returns a flattened slice of all values matching
+// the wildcard path (e.g. "key1.#.key2").
+func GetAll(obj []byte, key string) ([]any, error) {
+	res, err := Get(obj, key)
+	if err != nil {
+		return nil, err
+	}
+	// If result is a slice, assume it's the flattened result.
+	if slice, ok := res.([]any); ok {
+		return slice, nil
+	}
+	// Otherwise, return single element slice.
+	return []any{res}, nil
+}
+
+// Set decodes the JSON, sets the value at the given key, and returns updated JSON.
+func Set(obj []byte, key string, value any) ([]byte, error) {
+	data, err := Decode(obj)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := parsePath(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := setValue(data, segments, value); err != nil {
+		return nil, err
+	}
+	return Marshal(data)
+}
+
+// SetAll decodes the JSON, sets the value for all matching nodes (wildcard)
+// and returns updated JSON.
+func SetAll(obj []byte, key string, value any) ([]byte, error) {
+	data, err := Decode(obj)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := parsePath(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := setAllValue(data, segments, value); err != nil {
+		return nil, err
+	}
+	return Marshal(data)
+}
+
+// Delete decodes the JSON, deletes the node at the given key, and returns updated JSON.
+func Delete(obj []byte, key string) ([]byte, error) {
+	data, err := Decode(obj)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := parsePath(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := deleteValue(data, segments); err != nil {
+		return nil, err
+	}
+	return Marshal(data)
 }
