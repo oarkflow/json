@@ -430,7 +430,34 @@ func inferType(m map[string]any) {
 // NEW: Pool compiled regexes to avoid repeated allocations.
 var compiledRegexPool sync.Map // map[string]*regexp.Regexp
 
+// Global helper functions.
+func getString(m map[string]any, key string) (string, bool) {
+	if val, exists := m[key]; exists {
+		if str, ok := val.(string); ok {
+			return str, true
+		}
+	}
+	return "", false
+}
+
+func getMap(m map[string]any, key string) (map[string]any, bool) {
+	if val, exists := m[key]; exists {
+		if mp, ok := val.(map[string]any); ok {
+			return mp, true
+		}
+	}
+	return nil, false
+}
+
+func getFloat(m map[string]any, key string) (float64, bool) {
+	if val, exists := m[key]; exists {
+		return toFloat(val)
+	}
+	return 0, false
+}
+
 func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, error) {
+	// Handle boolean schema shortcut.
 	if b, ok := value.(bool); ok {
 		return &Schema{
 			Boolean:  &b,
@@ -438,14 +465,20 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			parent:   parent,
 		}, nil
 	}
+
 	m, ok := value.(map[string]any)
 	if !ok {
 		return nil, errors.New("schema must be an object or boolean")
 	}
+
 	inferType(m)
+
+	// Migrate "definitions" to "$defs" if needed.
 	if defs, exists := m["definitions"]; exists && m["$defs"] == nil {
 		m["$defs"] = defs
 	}
+
+	// Process legacy "dependencies" field.
 	if dep, exists := m["dependencies"]; exists {
 		if depMap, ok := dep.(map[string]any); ok {
 			for key, val := range depMap {
@@ -464,6 +497,8 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 		}
 	}
+
+	// Initialize a new schema instance.
 	schema := &Schema{
 		compiler:         compiler,
 		parent:           parent,
@@ -471,70 +506,56 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		anchors:          make(map[string]*Schema),
 		dynamicAnchors:   make(map[string]*Schema),
 	}
-	if id, exists := m["$id"]; exists {
-		if idStr, ok := id.(string); ok {
-			schema.ID = idStr
-		}
+
+	// Process core keywords.
+	if id, ok := getString(m, "$id"); ok {
+		schema.ID = id
 	}
-	if sVal, exists := m["$schema"]; exists {
-		if sStr, ok := sVal.(string); ok {
-			schema.Schema = sStr
-		}
+	if s, ok := getString(m, "$schema"); ok {
+		schema.Schema = s
 	}
-	if format, exists := m["format"]; exists {
-		if fStr, ok := format.(string); ok {
-			schema.Format = &fStr
-		}
+	if format, ok := getString(m, "format"); ok {
+		schema.Format = &format
 	}
-	if ref, exists := m["$ref"]; exists {
-		if refStr, ok := ref.(string); ok {
-			schema.Ref = refStr
-		}
+	if ref, ok := getString(m, "$ref"); ok {
+		schema.Ref = ref
 	}
-	if dynRef, exists := m["$dynamicRef"]; exists {
-		if dynRefStr, ok := dynRef.(string); ok {
-			schema.DynamicRef = dynRefStr
-		}
+	if dynRef, ok := getString(m, "$dynamicRef"); ok {
+		schema.DynamicRef = dynRef
 	}
-	if recRef, exists := m["$recursiveRef"]; exists {
-		if recRefStr, ok := recRef.(string); ok {
-			schema.RecursiveRef = recRefStr
-		}
+	if recRef, ok := getString(m, "$recursiveRef"); ok {
+		schema.RecursiveRef = recRef
 	}
-	if anchor, exists := m["$anchor"]; exists {
-		if anchorStr, ok := anchor.(string); ok {
-			schema.Anchor = anchorStr
-			if parent != nil {
-				if parent.anchors == nil {
-					parent.anchors = make(map[string]*Schema)
-				}
-				parent.anchors[anchorStr] = schema
+	if anchor, ok := getString(m, "$anchor"); ok {
+		schema.Anchor = anchor
+		if parent != nil {
+			if parent.anchors == nil {
+				parent.anchors = make(map[string]*Schema)
 			}
+			parent.anchors[anchor] = schema
 		}
 	}
-	if recAnchor, exists := m["$recursiveAnchor"]; exists {
-		if recAnchorBool, ok := recAnchor.(bool); ok {
+	if recAnchorVal, exists := m["$recursiveAnchor"]; exists {
+		if recAnchorBool, ok := recAnchorVal.(bool); ok {
 			schema.RecursiveAnchor = recAnchorBool
 		}
 	}
-	if dynAnchor, exists := m["$dynamicAnchor"]; exists {
-		if dynAnchorStr, ok := dynAnchor.(string); ok {
-			schema.DynamicAnchor = dynAnchorStr
-			if parent != nil {
-				if parent.dynamicAnchors == nil {
-					parent.dynamicAnchors = make(map[string]*Schema)
-				}
-				parent.dynamicAnchors[dynAnchorStr] = schema
+	if dynAnchor, ok := getString(m, "$dynamicAnchor"); ok {
+		schema.DynamicAnchor = dynAnchor
+		if parent != nil {
+			if parent.dynamicAnchors == nil {
+				parent.dynamicAnchors = make(map[string]*Schema)
 			}
+			parent.dynamicAnchors[dynAnchor] = schema
 		}
 	}
-	if comment, exists := m["$comment"]; exists {
-		if commentStr, ok := comment.(string); ok {
-			schema.Comment = &commentStr
-		}
+	if comment, ok := getString(m, "$comment"); ok {
+		schema.Comment = &comment
 	}
-	if vocab, exists := m["$vocabulary"]; exists {
-		if vocabMap, ok := vocab.(map[string]any); ok {
+
+	// Process $vocabulary.
+	if vocabRaw, exists := m["$vocabulary"]; exists {
+		if vocabMap, ok := vocabRaw.(map[string]any); ok {
 			schema.Vocabulary = make(map[string]bool)
 			for k, v := range vocabMap {
 				if b, ok := v.(bool); ok {
@@ -546,77 +567,38 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 		}
 	}
-	if defs, exists := m["$defs"]; exists {
-		if defsMap, ok := defs.(map[string]any); ok {
-			schema.Defs = make(map[string]*Schema)
-			for key, defVal := range defsMap {
-				compiledDef, err := compileSchema(defVal, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling $defs[%s]: %v", key, err)
-				}
-				schema.Defs[key] = compiledDef
+
+	// Process subschema definitions.
+	if defs, ok := getMap(m, "$defs"); ok {
+		schema.Defs = make(map[string]*Schema)
+		for key, defVal := range defs {
+			compiledDef, err := compileSchema(defVal, compiler, schema)
+			if err != nil {
+				return nil, fmt.Errorf("error compiling $defs[%s]: %v", key, err)
 			}
+			schema.Defs[key] = compiledDef
 		}
 	}
-	if allOf, exists := m["allOf"]; exists {
-		if arr, ok := allOf.([]any); ok {
-			resultChan := make(chan *Schema, len(arr))
-			errChan := make(chan error, len(arr))
-			for _, item := range arr {
-				compileSubschemaAsync(item, compiler, schema, resultChan, errChan)
-			}
-			for i := 0; i < len(arr); i++ {
-				select {
-				case subSchema := <-resultChan:
-					schema.AllOf = append(schema.AllOf, subSchema)
-				case err := <-errChan:
-					return nil, fmt.Errorf("error compiling allOf: %v", err)
-				}
-			}
-		}
+
+	// Process combinator keywords.
+	if err := compileSubschemaArray(m, "allOf", compiler, schema, &schema.AllOf); err != nil {
+		return nil, fmt.Errorf("error compiling allOf: %v", err)
 	}
-	if anyOf, exists := m["anyOf"]; exists {
-		if arr, ok := anyOf.([]any); ok {
-			for _, item := range arr {
-				subSchema, err := compileSchema(item, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling anyOf: %v", err)
-				}
-				schema.AnyOf = append(schema.AnyOf, subSchema)
-			}
-		}
+	if err := compileSubschemaArray(m, "anyOf", compiler, schema, &schema.AnyOf); err != nil {
+		return nil, fmt.Errorf("error compiling anyOf: %v", err)
 	}
-	if oneOf, exists := m["oneOf"]; exists {
-		if arr, ok := oneOf.([]any); ok {
-			for _, item := range arr {
-				subSchema, err := compileSchema(item, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling oneOf: %v", err)
-				}
-				schema.OneOf = append(schema.OneOf, subSchema)
-			}
-		}
+	if err := compileSubschemaArray(m, "oneOf", compiler, schema, &schema.OneOf); err != nil {
+		return nil, fmt.Errorf("error compiling oneOf: %v", err)
 	}
-	if not, exists := m["not"]; exists {
-		subSchema, err := compileSchema(not, compiler, schema)
+	if notVal, exists := m["not"]; exists {
+		subSchema, err := compileSchema(notVal, compiler, schema)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling not: %v", err)
 		}
 		schema.Not = subSchema
 	}
-	if ifVal, exists := m["if"]; exists {
-		subSchema, err := compileSchema(ifVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling if: %v", err)
-		}
-		schema.If = subSchema
-	}
-	if thenVal, exists := m["then"]; exists {
-		subSchema, err := compileSchema(thenVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling then: %v", err)
-		}
-		schema.Then = subSchema
+	if err := compileConditional(m, "if", "then", schema, compiler, &schema.If, &schema.Then); err != nil {
+		return nil, err
 	}
 	if elseVal, exists := m["else"]; exists {
 		subSchema, err := compileSchema(elseVal, compiler, schema)
@@ -625,20 +607,21 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		}
 		schema.Else = subSchema
 	}
-	if depSchemas, exists := m["dependentSchemas"]; exists {
-		if depMap, ok := depSchemas.(map[string]any); ok {
-			schema.DependentSchemas = make(map[string]*Schema)
-			for key, depVal := range depMap {
-				subSchema, err := compileSchema(depVal, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling dependentSchemas[%s]: %v", key, err)
-				}
-				schema.DependentSchemas[key] = subSchema
+
+	// Process dependent schemas and required.
+	if depSchemas, ok := getMap(m, "dependentSchemas"); ok {
+		schema.DependentSchemas = make(map[string]*Schema)
+		for key, depVal := range depSchemas {
+			subSchema, err := compileSchema(depVal, compiler, schema)
+			if err != nil {
+				return nil, fmt.Errorf("error compiling dependentSchemas[%s]: %v", key, err)
 			}
+			schema.DependentSchemas[key] = subSchema
 		}
 	}
-	if depReq, exists := m["dependentRequired"]; exists {
-		if depMap, ok := depReq.(map[string]any); ok {
+	// Process dependentRequired (only once; it may have been set by "dependencies").
+	if depReqRaw, exists := m["dependentRequired"]; exists {
+		if depMap, ok := depReqRaw.(map[string]any); ok {
 			schema.DependentRequired = make(map[string][]string)
 			for key, val := range depMap {
 				if arr, ok := val.([]any); ok {
@@ -651,19 +634,13 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 		}
 	}
-	if prefixItems, exists := m["prefixItems"]; exists {
-		if arr, ok := prefixItems.([]any); ok {
-			for _, item := range arr {
-				subSchema, err := compileSchema(item, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling prefixItems: %v", err)
-				}
-				schema.PrefixItems = append(schema.PrefixItems, subSchema)
-			}
-		}
+
+	// Process array-related subschemas.
+	if err := compileSubschemaArray(m, "prefixItems", compiler, schema, &schema.PrefixItems); err != nil {
+		return nil, fmt.Errorf("error compiling prefixItems: %v", err)
 	}
-	if items, exists := m["items"]; exists {
-		subSchema, err := compileSchema(items, compiler, schema)
+	if itemsVal, exists := m["items"]; exists {
+		subSchema, err := compileSchema(itemsVal, compiler, schema)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling items: %v", err)
 		}
@@ -676,15 +653,17 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		}
 		schema.UnevaluatedItems = subSchema
 	}
-	if contains, exists := m["contains"]; exists {
-		subSchema, err := compileSchema(contains, compiler, schema)
+	if containsVal, exists := m["contains"]; exists {
+		subSchema, err := compileSchema(containsVal, compiler, schema)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling contains: %v", err)
 		}
 		schema.Contains = subSchema
 	}
-	if props, exists := m["properties"]; exists {
-		if propsMap, ok := props.(map[string]any); ok {
+
+	// Process properties.
+	if propsRaw, exists := m["properties"]; exists {
+		if propsMap, ok := propsRaw.(map[string]any); ok {
 			sMap := SchemaMap{}
 			for key, propVal := range propsMap {
 				subSchema, err := compileSchema(propVal, compiler, schema)
@@ -696,79 +675,30 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Properties = &sMap
 		}
 	}
-
+	// Mark properties with an "in" field as required.
 	if schema.Properties != nil {
 		for key, prop := range *schema.Properties {
 			if prop.In != nil && *prop.In != "" {
-				found := false
-				for _, req := range schema.Required {
-					if req == key {
-						found = true
-						break
-					}
-				}
-				if !found {
+				if !slices.Contains(schema.Required, key) {
 					schema.Required = append(schema.Required, key)
 				}
 			}
 		}
 	}
+	// Process conditional required fields.
+	processConditionalRequired(m, schema)
 
-	if ifVal, ok := m["if"]; ok {
-		if thenVal, ok2 := m["then"]; ok2 {
-
-			if ifMap, ok := ifVal.(map[string]any); ok {
-				if reqArr, ok := ifMap["required"].([]any); ok {
-					for _, reqKey := range reqArr {
-						if key, ok := reqKey.(string); ok {
-
-							if thenMap, ok := thenVal.(map[string]any); ok {
-								if thenProps, ok := thenMap["properties"].(map[string]any); ok {
-									if mod, exists := thenProps[key]; exists {
-										if modMap, ok := mod.(map[string]any); ok {
-											if reqFields, ok := modMap["required"].([]any); ok {
-
-												if schema.Properties != nil {
-													if propSchema, exists := (*schema.Properties)[key]; exists {
-														for _, field := range reqFields {
-															if strField, ok := field.(string); ok {
-																found := false
-																for _, r := range propSchema.Required {
-																	if r == strField {
-																		found = true
-																		break
-																	}
-																}
-																if !found {
-																	propSchema.Required = append(propSchema.Required, strField)
-																}
-															}
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
+	// Process patternProperties.
 	if patProps, exists := m["patternProperties"]; exists {
 		if patMap, ok := patProps.(map[string]any); ok {
 			sMap := SchemaMap{}
 			for pattern, patVal := range patMap {
-				// NEW: Compile the sub-schema.
 				subSchema, err := compileSchema(patVal, compiler, schema)
 				if err != nil {
 					return nil, fmt.Errorf("error compiling patternProperties[%s]: %v", pattern, err)
 				}
 				sMap[pattern] = subSchema
-				// {changed code} Use pooled regex instead of calling regexp.Compile every time.
+				// Use pooled regex to avoid recompilation.
 				var re *regexp.Regexp
 				if cached, ok := compiledRegexPool.Load(pattern); ok {
 					re = cached.(*regexp.Regexp)
@@ -784,6 +714,8 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.PatternProperties = &sMap
 		}
 	}
+
+	// Process additionalProperties and propertyNames.
 	if addProps, exists := m["additionalProperties"]; exists {
 		subSchema, err := compileSchema(addProps, compiler, schema)
 		if err != nil {
@@ -810,6 +742,8 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.UnevaluatedProperties = subSchema
 		}
 	}
+
+	// Process type.
 	if t, exists := m["type"]; exists {
 		switch v := t.(type) {
 		case string:
@@ -821,6 +755,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 					types = append(types, str)
 				}
 			}
+			// Prefer "array" if present.
 			for _, typ := range types {
 				if typ == "array" {
 					schema.Type = SchemaType{typ}
@@ -829,11 +764,13 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 			schema.Type = SchemaType(types)
 		}
-	TypeDone:
 	}
+TypeDone:
 	if schema.Pattern != nil && len(schema.Type) == 0 {
 		schema.Type = SchemaType{"string"}
 	}
+
+	// Process enum and const.
 	if enumVal, exists := m["enum"]; exists {
 		if enumArr, ok := enumVal.([]any); ok {
 			schema.Enum = enumArr
@@ -842,93 +779,71 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	if constVal, exists := m["const"]; exists {
 		schema.Const = constVal
 	}
-	if multOf, exists := m["multipleOf"]; exists {
-		if num, ok := toFloat(multOf); ok {
-			r := Rat(num)
-			schema.MultipleOf = &r
-		}
+
+	// Process numeric validations.
+	if num, ok := getFloat(m, "multipleOf"); ok {
+		r := Rat(num)
+		schema.MultipleOf = &r
 	}
-	if max, exists := m["maximum"]; exists {
-		if num, ok := toFloat(max); ok {
-			r := Rat(num)
-			schema.Maximum = &r
-		}
+	if num, ok := getFloat(m, "maximum"); ok {
+		r := Rat(num)
+		schema.Maximum = &r
 	}
-	if exMax, exists := m["exclusiveMaximum"]; exists {
-		if num, ok := toFloat(exMax); ok {
-			r := Rat(num)
-			schema.ExclusiveMaximum = &r
-		}
+	if num, ok := getFloat(m, "exclusiveMaximum"); ok {
+		r := Rat(num)
+		schema.ExclusiveMaximum = &r
 	}
-	if min, exists := m["minimum"]; exists {
-		if num, ok := toFloat(min); ok {
-			r := Rat(num)
-			schema.Minimum = &r
-		}
+	if num, ok := getFloat(m, "minimum"); ok {
+		r := Rat(num)
+		schema.Minimum = &r
 	}
-	if exMin, exists := m["exclusiveMinimum"]; exists {
-		if num, ok := toFloat(exMin); ok {
-			r := Rat(num)
-			schema.ExclusiveMinimum = &r
-		}
+	if num, ok := getFloat(m, "exclusiveMinimum"); ok {
+		r := Rat(num)
+		schema.ExclusiveMinimum = &r
 	}
-	if maxLen, exists := m["maxLength"]; exists {
-		if num, ok := toFloat(maxLen); ok {
-			schema.MaxLength = &num
-		}
+	if num, ok := getFloat(m, "maxLength"); ok {
+		schema.MaxLength = &num
 	}
-	if minLen, exists := m["minLength"]; exists {
-		if num, ok := toFloat(minLen); ok {
-			schema.MinLength = &num
-		}
+	if num, ok := getFloat(m, "minLength"); ok {
+		schema.MinLength = &num
 	}
-	if pattern, exists := m["pattern"]; exists {
-		if patStr, ok := pattern.(string); ok {
-			schema.Pattern = &patStr
-			re, err := regexp.Compile(patStr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid pattern regex '%s': %v", patStr, err)
-			}
-			schema.compiledPatterns[patStr] = re
+	if patStr, ok := getString(m, "pattern"); ok {
+		schema.Pattern = &patStr
+		re, err := regexp.Compile(patStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pattern regex '%s': %v", patStr, err)
 		}
+		schema.compiledPatterns[patStr] = re
 	}
-	if maxItems, exists := m["maxItems"]; exists {
-		if num, ok := toFloat(maxItems); ok {
-			schema.MaxItems = &num
-		}
+
+	// Process array length and uniqueness.
+	if num, ok := getFloat(m, "maxItems"); ok {
+		schema.MaxItems = &num
 	}
-	if minItems, exists := m["minItems"]; exists {
-		if num, ok := toFloat(minItems); ok {
-			schema.MinItems = &num
-		}
+	if num, ok := getFloat(m, "minItems"); ok {
+		schema.MinItems = &num
 	}
 	if unique, exists := m["uniqueItems"]; exists {
 		if b, ok := unique.(bool); ok {
 			schema.UniqueItems = &b
 		}
 	}
-	if maxContains, exists := m["maxContains"]; exists {
-		if num, ok := toFloat(maxContains); ok {
-			schema.MaxContains = &num
-		}
+	if num, ok := getFloat(m, "maxContains"); ok {
+		schema.MaxContains = &num
 	}
-	if minContains, exists := m["minContains"]; exists {
-		if num, ok := toFloat(minContains); ok {
-			schema.MinContains = &num
-		}
+	if num, ok := getFloat(m, "minContains"); ok {
+		schema.MinContains = &num
 	}
-	if maxProps, exists := m["maxProperties"]; exists {
-		if num, ok := toFloat(maxProps); ok {
-			schema.MaxProperties = &num
-		}
+
+	// Process object property counts.
+	if num, ok := getFloat(m, "maxProperties"); ok {
+		schema.MaxProperties = &num
 	}
-	if minProps, exists := m["minProperties"]; exists {
-		if num, ok := toFloat(minProps); ok {
-			schema.MinProperties = &num
-		}
+	if num, ok := getFloat(m, "minProperties"); ok {
+		schema.MinProperties = &num
 	}
-	if req, exists := m["required"]; exists {
-		if arr, ok := req.([]any); ok {
+	if reqArr, exists := m["required"]; exists {
+		if arr, ok := reqArr.([]any); ok {
 			for _, item := range arr {
 				if str, ok := item.(string); ok {
 					schema.Required = append(schema.Required, str)
@@ -936,46 +851,28 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			}
 		}
 	}
-	if depReq, exists := m["dependentRequired"]; exists {
-		if depMap, ok := depReq.(map[string]any); ok {
-			schema.DependentRequired = make(map[string][]string)
-			for key, val := range depMap {
-				if arr, ok := val.([]any); ok {
-					for _, item := range arr {
-						if str, ok := item.(string); ok {
-							schema.DependentRequired[key] = append(schema.DependentRequired[key], str)
-						}
-					}
-				}
-			}
-		}
+
+	// Process content keywords.
+	if s, ok := getString(m, "contentEncoding"); ok {
+		schema.ContentEncoding = &s
 	}
-	if contentEnc, exists := m["contentEncoding"]; exists {
-		if s, ok := contentEnc.(string); ok {
-			schema.ContentEncoding = &s
-		}
+	if s, ok := getString(m, "contentMediaType"); ok {
+		schema.ContentMediaType = &s
 	}
-	if contentMedia, exists := m["contentMediaType"]; exists {
-		if s, ok := contentMedia.(string); ok {
-			schema.ContentMediaType = &s
-		}
-	}
-	if contentSchema, exists := m["contentSchema"]; exists {
-		subSchema, err := compileSchema(contentSchema, compiler, schema)
+	if cs, exists := m["contentSchema"]; exists {
+		subSchema, err := compileSchema(cs, compiler, schema)
 		if err != nil {
 			return nil, fmt.Errorf("error compiling contentSchema: %v", err)
 		}
 		schema.ContentSchema = subSchema
 	}
-	if title, exists := m["title"]; exists {
-		if s, ok := title.(string); ok {
-			schema.Title = &s
-		}
+
+	// Process documentation keywords.
+	if s, ok := getString(m, "title"); ok {
+		schema.Title = &s
 	}
-	if desc, exists := m["description"]; exists {
-		if s, ok := desc.(string); ok {
-			schema.Description = &s
-		}
+	if s, ok := getString(m, "description"); ok {
+		schema.Description = &s
 	}
 	if def, exists := m["default"]; exists {
 		d, err := prepareDefault(def)
@@ -1004,41 +901,32 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
+	if inVal, ok := getString(m, "in"); ok {
+		schema.In = &inVal
+	}
+	if fieldVal, ok := getString(m, "field"); ok {
+		schema.Field = &fieldVal
+	}
 
-	if inVal, exists := m["in"]; exists {
-		if inStr, ok := inVal.(string); ok {
-			schema.In = &inStr
-		}
-	}
-	if fieldVal, exists := m["field"]; exists {
-		if fieldStr, ok := fieldVal.(string); ok {
-			schema.Field = &fieldStr
-		}
-	}
+	// Override type to "number" if numeric validations exist.
 	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
 		schema.Type = SchemaType{"number"}
 	}
+	// Override type to "object" if properties exist.
 	if schema.Properties != nil {
 		schema.Type = SchemaType{"object"}
 	}
+
+	// Register schema by its ID.
 	if schema.ID != "" {
 		compiler.schemas[schema.ID] = schema
 	}
+
+	// Infer union types from oneOf/anyOf if type is still undefined.
 	if len(schema.Type) == 0 {
 		var unionTypes []string
-		if len(schema.OneOf) > 0 {
-			for _, candidate := range schema.OneOf {
-				if len(candidate.Type) > 0 {
-					for _, t := range candidate.Type {
-						if !slices.Contains(unionTypes, t) {
-							unionTypes = append(unionTypes, t)
-						}
-					}
-				}
-			}
-		}
-		if len(unionTypes) == 0 && len(schema.AnyOf) > 0 {
-			for _, candidate := range schema.AnyOf {
+		for _, candidates := range [][]*Schema{schema.OneOf, schema.AnyOf} {
+			for _, candidate := range candidates {
 				if len(candidate.Type) > 0 {
 					for _, t := range candidate.Type {
 						if !slices.Contains(unionTypes, t) {
@@ -1050,22 +938,25 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		}
 		if len(unionTypes) > 0 {
 			schema.Type = SchemaType(unionTypes)
-		} else if schema.Properties != nil || (schema.If != nil || schema.Then != nil || schema.Else != nil) {
+		} else if schema.Properties != nil || schema.If != nil || schema.Then != nil || schema.Else != nil {
 			schema.Type = SchemaType{"object"}
 		}
 	}
+
+	// Process Draft2020 keywords and perform self‑validation.
 	if err := compileDraft2020Keywords(m, schema); err != nil {
 		return nil, err
 	}
 	if err := selfValidateSchema(schema); err != nil {
 		return nil, fmt.Errorf("schema self‑validation failed: %w", err)
 	}
-	// At the end, before "if err := compileDraft2020Keywords..."
+
+	// Process discriminator.
 	if disc, exists := m["discriminator"]; exists {
 		if d, ok := disc.(map[string]any); ok {
 			prop, ok := d["propertyName"].(string)
 			if !ok || prop == "" {
-				return nil, errors.New("discriminator: propertyName must be a non-empty string")
+				return nil, errors.New("discriminator: propertyName must be a non‑empty string")
 			}
 			mapping := make(map[string]string)
 			if mapp, ok := d["mapping"].(map[string]any); ok {
@@ -1083,7 +974,140 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			return nil, errors.New("discriminator must be an object")
 		}
 	}
+
 	return schema, nil
+}
+
+// compileSubschemaArray processes keywords whose value is an array of subschemas.
+func compileSubschemaArray(m map[string]any, key string, compiler *Compiler, parent *Schema, target *[]*Schema) error {
+	raw, exists := m[key]
+	if !exists {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("%s must be an array", key)
+	}
+	// For "allOf", use asynchronous compilation.
+	if key == "allOf" {
+		resultChan := make(chan *Schema, len(arr))
+		errChan := make(chan error, len(arr))
+		for _, item := range arr {
+			compileSubschemaAsync(item, compiler, parent, resultChan, errChan)
+		}
+		for i := 0; i < len(arr); i++ {
+			select {
+			case subSchema := <-resultChan:
+				*target = append(*target, subSchema)
+			case err := <-errChan:
+				return err
+			}
+		}
+	} else {
+		// Synchronous compilation for anyOf, oneOf, prefixItems, etc.
+		for _, item := range arr {
+			subSchema, err := compileSchema(item, compiler, parent)
+			if err != nil {
+				return err
+			}
+			*target = append(*target, subSchema)
+		}
+	}
+	return nil
+}
+
+// compileConditional compiles the "if" and "then" keywords together.
+func compileConditional(m map[string]any, ifKey, thenKey string, parent *Schema, compiler *Compiler, ifTarget, thenTarget **Schema) error {
+	if ifVal, exists := m[ifKey]; exists {
+		subSchema, err := compileSchema(ifVal, compiler, parent)
+		if err != nil {
+			return fmt.Errorf("error compiling %s: %v", ifKey, err)
+		}
+		*ifTarget = subSchema
+		if thenVal, exists2 := m[thenKey]; exists2 {
+			subSchema, err := compileSchema(thenVal, compiler, parent)
+			if err != nil {
+				return fmt.Errorf("error compiling %s: %v", thenKey, err)
+			}
+			*thenTarget = subSchema
+		}
+	}
+	return nil
+}
+
+// processConditionalRequired refactors the conditional required logic into clearer steps.
+func processConditionalRequired(m map[string]any, schema *Schema) {
+	// Check if "if" and "then" exist.
+	ifVal, ifExists := m["if"]
+	thenVal, thenExists := m["then"]
+	if !ifExists || !thenExists {
+		return
+	}
+
+	// Convert "if" to a map.
+	ifMap, ok := ifVal.(map[string]any)
+	if !ok {
+		return
+	}
+
+	// Extract required fields from the "if" block.
+	reqFieldsRaw, reqExists := ifMap["required"]
+	if !reqExists {
+		return
+	}
+	reqFields, ok := reqFieldsRaw.([]any)
+	if !ok {
+		return
+	}
+
+	// Process each required field.
+	for _, reqFieldRaw := range reqFields {
+		reqField, ok := reqFieldRaw.(string)
+		if !ok || reqField == "" {
+			continue
+		}
+		// Check if the "then" block defines properties for this required field.
+		thenMap, ok := thenVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		props, propsExist := thenMap["properties"]
+		if !propsExist {
+			continue
+		}
+		propsMap, ok := props.(map[string]any)
+		if !ok {
+			continue
+		}
+		propSchemaRaw, exists := propsMap[reqField]
+		if !exists {
+			continue
+		}
+		propSchemaMap, ok := propSchemaRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		// If the property schema defines its own required fields, add them.
+		innerReqRaw, exists := propSchemaMap["required"]
+		if !exists {
+			continue
+		}
+		innerReqArr, ok := innerReqRaw.([]any)
+		if !ok {
+			continue
+		}
+		// Append each required field from the property schema.
+		if schema.Properties != nil {
+			if propSchema, exists := (*schema.Properties)[reqField]; exists {
+				for _, fieldRaw := range innerReqArr {
+					fieldStr, ok := fieldRaw.(string)
+					if ok && !slices.Contains(propSchema.Required, fieldStr) {
+						propSchema.Required = append(propSchema.Required, fieldStr)
+					}
+				}
+			}
+		}
+	}
 }
 
 // NEW: add helper function for discriminator-based validation
