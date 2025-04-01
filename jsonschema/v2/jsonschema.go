@@ -26,6 +26,48 @@ import (
 	"github.com/oarkflow/expr"
 )
 
+// Add convertValue helper function to convert extracted values based on schema type.
+func convertValue(val any, expectedType string) (any, error) {
+	switch expectedType {
+	case "number":
+		switch v := val.(type) {
+		case string:
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("cannot convert %q to number: %v", v, err)
+			}
+			return f, nil
+		default:
+			return val, nil
+		}
+	case "integer":
+		switch v := val.(type) {
+		case string:
+			i, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("cannot convert %q to integer: %v", v, err)
+			}
+			return i, nil
+		default:
+			return val, nil
+		}
+	case "boolean":
+		switch v := val.(type) {
+		case string:
+			if v == "true" {
+				return true, nil
+			} else if v == "false" {
+				return false, nil
+			}
+			return nil, fmt.Errorf("cannot convert %q to boolean", v)
+		default:
+			return val, nil
+		}
+	default:
+		return val, nil
+	}
+}
+
 type JSONParser struct {
 	data []byte
 	pos  int
@@ -2010,7 +2052,15 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 				// Extract from request using the property schema's In value.
 				val, err := extractDataFromRequest(r, *propSchema.In, &fieldName)
 				if err == nil {
-					m[key] = val
+					if len(propSchema.Type) > 0 {
+						conv, err := convertValue(val, propSchema.Type[0])
+						if err != nil {
+							return fmt.Errorf("failed to convert field %s: %v", key, err)
+						}
+						m[key] = conv
+					} else {
+						m[key] = val
+					}
 				}
 			}
 		}
@@ -2113,7 +2163,15 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 				}
 				val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName)
 				if err == nil {
-					m[key] = val
+					if len(propSchema.Type) > 0 {
+						conv, err := convertValue(val, propSchema.Type[0])
+						if err != nil {
+							return fmt.Errorf("failed to convert field %s: %v", key, err)
+						}
+						m[key] = conv
+					} else {
+						m[key] = val
+					}
 				}
 			}
 		}
