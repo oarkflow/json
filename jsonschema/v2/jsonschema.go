@@ -246,6 +246,7 @@ func (p *JSONParser) parseString() (string, error) {
 	return "", errors.New("unexpected end of string")
 }
 
+// NEW: Optimize parseNumber to reduce allocations.
 func (p *JSONParser) parseNumber() (any, error) {
 	start := p.pos
 	if p.data[p.pos] == '-' {
@@ -269,11 +270,11 @@ func (p *JSONParser) parseNumber() (any, error) {
 			p.pos++
 		}
 	}
-	numStr := string(p.data[start:p.pos])
-	if i, err := strconv.Atoi(numStr); err == nil {
+	numBytes := p.data[start:p.pos]
+	if i, err := strconv.ParseInt(string(numBytes), 10, 64); err == nil {
 		return i, nil
 	}
-	f, err := strconv.ParseFloat(numStr, 64)
+	f, err := strconv.ParseFloat(string(numBytes), 64)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +427,9 @@ func inferType(m map[string]any) {
 	}
 }
 
+// NEW: Pool compiled regexes to avoid repeated allocations.
+var compiledRegexPool sync.Map // map[string]*regexp.Regexp
+
 func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, error) {
 	if b, ok := value.(bool); ok {
 		return &Schema{
@@ -556,12 +560,18 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	}
 	if allOf, exists := m["allOf"]; exists {
 		if arr, ok := allOf.([]any); ok {
+			resultChan := make(chan *Schema, len(arr))
+			errChan := make(chan error, len(arr))
 			for _, item := range arr {
-				subSchema, err := compileSchema(item, compiler, schema)
-				if err != nil {
+				compileSubschemaAsync(item, compiler, schema, resultChan, errChan)
+			}
+			for i := 0; i < len(arr); i++ {
+				select {
+				case subSchema := <-resultChan:
+					schema.AllOf = append(schema.AllOf, subSchema)
+				case err := <-errChan:
 					return nil, fmt.Errorf("error compiling allOf: %v", err)
 				}
-				schema.AllOf = append(schema.AllOf, subSchema)
 			}
 		}
 	}
@@ -752,14 +762,22 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 		if patMap, ok := patProps.(map[string]any); ok {
 			sMap := SchemaMap{}
 			for pattern, patVal := range patMap {
+				// NEW: Compile the sub-schema.
 				subSchema, err := compileSchema(patVal, compiler, schema)
 				if err != nil {
 					return nil, fmt.Errorf("error compiling patternProperties[%s]: %v", pattern, err)
 				}
 				sMap[pattern] = subSchema
-				re, err := regexp.Compile(pattern)
-				if err != nil {
-					return nil, fmt.Errorf("invalid pattern regex '%s': %v", pattern, err)
+				// {changed code} Use pooled regex instead of calling regexp.Compile every time.
+				var re *regexp.Regexp
+				if cached, ok := compiledRegexPool.Load(pattern); ok {
+					re = cached.(*regexp.Regexp)
+				} else {
+					re, err = regexp.Compile(pattern)
+					if err != nil {
+						return nil, fmt.Errorf("invalid pattern regex '%s': %v", pattern, err)
+					}
+					compiledRegexPool.Store(pattern, re)
 				}
 				schema.compiledPatterns[pattern] = re
 			}
@@ -2546,4 +2564,16 @@ func overrideFromFiberCtx(ctx Ctx, data map[string]any, schema *Schema) {
 			overrideFromFiberCtx(ctx, nested, propSchema)
 		}
 	}
+}
+
+// NEW: Introduce asynchronous subschema compilation to boost performance.
+func compileSubschemaAsync(item any, compiler *Compiler, parent *Schema, result chan<- *Schema, errChan chan<- error) {
+	go func() {
+		subSchema, err := compileSchema(item, compiler, parent)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		result <- subSchema
+	}()
 }
