@@ -20,7 +20,7 @@ func main() {
 
 	for _, test := range tests {
 		d, err := json.Fix(test)
-		fmt.Println(d, json.IsValid(test))
+		fmt.Println(json.IsValid(d), json.IsValid(test))
 		if err != nil {
 			println("error", err.Error())
 		}

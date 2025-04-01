@@ -11,12 +11,12 @@ import (
 
 func main() {
 	// Sample schema for a User.
-	schemaJSON, err := os.ReadFile("schema.json")
+	schemaJSON, err := os.ReadFile("complex_schema.json")
 	if err != nil {
 		panic(err)
 	}
 	// Sample JSON data that should pass validation.
-	dataJSON, err := os.ReadFile("instance_valid.json")
+	dataJSON, err := os.ReadFile("complex_data.json")
 	var result map[string]any
 
 	if err := v2.Unmarshal(dataJSON, &result, schemaJSON); err != nil {

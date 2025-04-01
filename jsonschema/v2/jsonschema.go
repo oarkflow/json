@@ -26,6 +26,48 @@ import (
 	"github.com/oarkflow/expr"
 )
 
+// Add convertValue helper function to convert extracted values based on schema type.
+func convertValue(val any, expectedType string) (any, error) {
+	switch expectedType {
+	case "number":
+		switch v := val.(type) {
+		case string:
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("cannot convert %q to number: %v", v, err)
+			}
+			return f, nil
+		default:
+			return val, nil
+		}
+	case "integer":
+		switch v := val.(type) {
+		case string:
+			i, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("cannot convert %q to integer: %v", v, err)
+			}
+			return i, nil
+		default:
+			return val, nil
+		}
+	case "boolean":
+		switch v := val.(type) {
+		case string:
+			if v == "true" {
+				return true, nil
+			} else if v == "false" {
+				return false, nil
+			}
+			return nil, fmt.Errorf("cannot convert %q to boolean", v)
+		default:
+			return val, nil
+		}
+	default:
+		return val, nil
+	}
+}
+
 type JSONParser struct {
 	data []byte
 	pos  int
@@ -330,6 +372,8 @@ type Schema struct {
 	ReadOnly                  *bool               `json:"readOnly,omitempty"`
 	WriteOnly                 *bool               `json:"writeOnly,omitempty"`
 	Examples                  []any               `json:"examples,omitempty"`
+	In                        *string             `json:"in,omitempty"`
+	Field                     *string             `json:"field,omitempty"`
 }
 
 type Compiler struct {
@@ -861,6 +905,17 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Examples = arr
 		}
 	}
+	// Handle additional fields "in" and "field"
+	if inVal, exists := m["in"]; exists {
+		if inStr, ok := inVal.(string); ok {
+			schema.In = &inStr
+		}
+	}
+	if fieldVal, exists := m["field"]; exists {
+		if fieldStr, ok := fieldVal.(string); ok {
+			schema.Field = &fieldStr
+		}
+	}
 	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
 		schema.Type = SchemaType{"number"}
 	}
@@ -869,6 +924,36 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	}
 	if schema.ID != "" {
 		compiler.schemas[schema.ID] = schema
+	}
+	if len(schema.Type) == 0 {
+		var unionTypes []string
+		if len(schema.OneOf) > 0 {
+			for _, candidate := range schema.OneOf {
+				if len(candidate.Type) > 0 {
+					for _, t := range candidate.Type {
+						if !slices.Contains(unionTypes, t) {
+							unionTypes = append(unionTypes, t)
+						}
+					}
+				}
+			}
+		}
+		if len(unionTypes) == 0 && len(schema.AnyOf) > 0 {
+			for _, candidate := range schema.AnyOf {
+				if len(candidate.Type) > 0 {
+					for _, t := range candidate.Type {
+						if !slices.Contains(unionTypes, t) {
+							unionTypes = append(unionTypes, t)
+						}
+					}
+				}
+			}
+		}
+		if len(unionTypes) > 0 {
+			schema.Type = SchemaType(unionTypes)
+		} else if schema.Properties != nil || (schema.If != nil || schema.Then != nil || schema.Else != nil) {
+			schema.Type = SchemaType{"object"}
+		}
 	}
 	if err := compileDraft2020Keywords(m, schema); err != nil {
 		return nil, err
@@ -1334,6 +1419,18 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	data, err := s.prepareData(unprepared)
 	if err != nil {
 		return fmt.Errorf("at %s: failed to prepare data: %w", instancePath, err)
+	}
+	if obj, ok := data.(map[string]any); ok {
+		for _, field := range s.Required {
+			if _, exists := obj[field]; !exists {
+				if s.Properties != nil {
+					if propSchema, ok := (*s.Properties)[field]; ok && propSchema.Default != nil {
+						continue
+					}
+				}
+				return fmt.Errorf("at %s: missing required field '%s'", instancePath, field)
+			}
+		}
 	}
 	if err := validateApplicatorKeywords(data, s); err != nil {
 		return fmt.Errorf("at %s: %w", instancePath, err)
@@ -1867,6 +1964,239 @@ func selfValidateSchema(schema *Schema) error {
 			}
 
 		}
+	}
+	return nil
+}
+
+// extractDataFromRequest extracts data from the request based on the provided "in" value and field.
+func extractDataFromRequest(r *http.Request, in string, field *string) (any, error) {
+	switch strings.ToLower(in) {
+	case "query":
+		m := map[string]any{}
+		for k, v := range r.URL.Query() {
+			if len(v) == 1 {
+				m[k] = v[0]
+			} else {
+				m[k] = v
+			}
+		}
+		if field != nil && *field != "" {
+			if val, exists := m[*field]; exists {
+				return val, nil
+			}
+			return nil, fmt.Errorf("field %q not found in query", *field)
+		}
+		return m, nil
+	case "params":
+		// Assuming params are stored in context under the key "params"
+		if params, ok := r.Context().Value("params").(map[string]string); ok {
+			m := map[string]any{}
+			for k, v := range params {
+				m[k] = v
+			}
+			if field != nil && *field != "" {
+				if val, exists := m[*field]; exists {
+					return val, nil
+				}
+				return nil, fmt.Errorf("field %q not found in params", *field)
+			}
+			return m, nil
+		}
+		return nil, fmt.Errorf("no params found in context")
+	case "body":
+		fallthrough
+	default:
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %v", err)
+		}
+		// Reset r.Body for further use
+		r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+		var data any
+		if err := json.Unmarshal(bodyBytes, &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal request body: %v", err)
+		}
+		if field != nil && *field != "" {
+			if m, ok := data.(map[string]any); ok {
+				if val, exists := m[*field]; exists {
+					return val, nil
+				}
+				return nil, fmt.Errorf("field %q not found in body", *field)
+			}
+			return nil, fmt.Errorf("request body is not a JSON object")
+		}
+		return data, nil
+	}
+}
+
+// UnmarshalRequest validates and unmarshals data from an http.Request according to the Schema’s "In" and "Field" properties.
+func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
+	var data any
+	// If top-level schema is an object with properties, merge the body with property-level extraction.
+	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
+		bodyData, err := extractDataFromRequest(r, "body", nil)
+		if err != nil {
+			bodyData = map[string]any{}
+		}
+		m, ok := bodyData.(map[string]any)
+		if !ok {
+			m = map[string]any{}
+		}
+		// For each property specifying a non-body source, override its value.
+		for key, propSchema := range *s.Properties {
+			if propSchema.In != nil && *propSchema.In != "body" {
+				fieldName := key
+				if propSchema.Field != nil && *propSchema.Field != "" {
+					fieldName = *propSchema.Field
+				}
+				// Extract from request using the property schema's In value.
+				val, err := extractDataFromRequest(r, *propSchema.In, &fieldName)
+				if err == nil {
+					if len(propSchema.Type) > 0 {
+						conv, err := convertValue(val, propSchema.Type[0])
+						if err != nil {
+							return fmt.Errorf("failed to convert field %s: %v", key, err)
+						}
+						m[key] = conv
+					} else {
+						m[key] = val
+					}
+				}
+			}
+		}
+		data = m
+	} else {
+		in := "body"
+		if s.In != nil && *s.In != "" {
+			in = *s.In
+		}
+		var err error
+		data, err = extractDataFromRequest(r, in, s.Field)
+		if err != nil {
+			return err
+		}
+	}
+	merged, err := s.SmartUnmarshal(data)
+	if err != nil {
+		return fmt.Errorf("validation failed: %v", err)
+	}
+	mergedBytes, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(mergedBytes, dest); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UnmarshalAndValidateRequest compiles the schema and then extracts, validates, and unmarshals data from the http.Request into dest.
+func UnmarshalAndValidateRequest(r *http.Request, dest any, schemaBytes []byte) error {
+	compiler := NewCompiler()
+	schema, err := compiler.Compile(schemaBytes)
+	if err != nil {
+		return fmt.Errorf("failed to compile schema: %v", err)
+	}
+	return schema.UnmarshalRequest(r, dest)
+}
+
+// Ctx mimics the fiber.Ctx interface.
+type Ctx interface {
+	Params(key string) string
+	Query(key string) string
+	Body() []byte
+	BodyParser(dest interface{}) error
+}
+
+// extractDataFromFiberCtx extracts data from the fiber‑style context based on "in" value and optional field.
+func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
+	switch strings.ToLower(in) {
+	case "query":
+		if field != nil && *field != "" {
+			return ctx.Query(*field), nil
+		}
+		return nil, errors.New("for query extraction, a field name must be provided")
+	case "params":
+		if field != nil && *field != "" {
+			return ctx.Params(*field), nil
+		}
+		return nil, errors.New("for params extraction, a field name must be provided")
+	case "body":
+		fallthrough
+	default:
+		if field != nil && *field != "" {
+			var m map[string]any
+			if err := ctx.BodyParser(&m); err != nil {
+				return nil, fmt.Errorf("failed to parse body: %v", err)
+			}
+			if val, exists := m[*field]; exists {
+				return val, nil
+			}
+			return nil, fmt.Errorf("field %q not found in body", *field)
+		}
+		var data any
+		bodyBytes := ctx.Body()
+		if err := json.Unmarshal(bodyBytes, &data); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal body: %v", err)
+		}
+		return data, nil
+	}
+}
+
+// UnmarshalFiberCtx validates and unmarshals data from a fiber‑style context based on the Schema’s "in" and "field" properties.
+func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
+	var data any
+	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
+		bodyData, err := extractDataFromFiberCtx(ctx, "body", nil)
+		if err != nil {
+			bodyData = map[string]any{}
+		}
+		m, ok := bodyData.(map[string]any)
+		if !ok {
+			m = map[string]any{}
+		}
+		for key, propSchema := range *s.Properties {
+			if propSchema.In != nil && *propSchema.In != "body" {
+				fieldName := key
+				if propSchema.Field != nil && *propSchema.Field != "" {
+					fieldName = *propSchema.Field
+				}
+				val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName)
+				if err == nil {
+					if len(propSchema.Type) > 0 {
+						conv, err := convertValue(val, propSchema.Type[0])
+						if err != nil {
+							return fmt.Errorf("failed to convert field %s: %v", key, err)
+						}
+						m[key] = conv
+					} else {
+						m[key] = val
+					}
+				}
+			}
+		}
+		data = m
+	} else {
+		in := "body"
+		if s.In != nil && *s.In != "" {
+			in = *s.In
+		}
+		var err error
+		data, err = extractDataFromFiberCtx(ctx, in, s.Field)
+		if err != nil {
+			return err
+		}
+	}
+	merged, err := s.SmartUnmarshal(data)
+	if err != nil {
+		return fmt.Errorf("validation failed: %v", err)
+	}
+	mergedBytes, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(mergedBytes, dest); err != nil {
+		return err
 	}
 	return nil
 }

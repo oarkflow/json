@@ -1,0 +1,152 @@
+{
+    "$id": "http://example.com/employee.json",
+    "$schema": "http://json-schema.org/draft/2020-12/schema",
+    "title": "Employee",
+    "type": "object",
+    "required": [ "id", "name", "email", "address", "role" ],
+    "properties": {
+        "id": {
+            "type": "string",
+            "format": "uuid",
+            "default": "123e4567-e89b-12d3-a456-426614174000"
+        },
+        "name": {
+            "type": "object",
+            "required": [ "firstName", "lastName" ],
+            "properties": {
+                "firstName": {
+                    "type": "string",
+                    "default": "John",
+                    "in": "param"
+                },
+                "lastName": {
+                    "type": "string",
+                    "default": "Doe"
+                }
+            }
+        },
+        "email": {
+            "type": "string",
+            "format": "email",
+            "default": "john.doe@example.com"
+        },
+        "address": {
+            "type": "object",
+            "required": [ "street", "city", "zipCode" ],
+            "properties": {
+                "street": {
+                    "type": "string",
+                    "default": "123 Main St"
+                },
+                "city": {
+                    "type": "string",
+                    "default": "Anytown"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "zipCode": {
+                    "type": "string",
+                    "pattern": "^[0-9]{5}(-[0-9]{4})?$",
+                    "default": "12345"
+                }
+            }
+        },
+        "skills": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [ "name", "level" ],
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": [ "beginner", "intermediate", "expert" ]
+                    }
+                }
+            },
+            "minItems": 1,
+            "default": [
+                {
+                    "name": "communication",
+                    "level": "expert"
+                }
+            ]
+        },
+        "employmentDetails": {
+            "type": "object",
+            "properties": {
+                "startDate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "default": "2020-01-01T00:00:00Z"
+                },
+                "salary": {
+                    "type": "number",
+                    "minimum": 30000
+                }
+            }
+        },
+        "role": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "title": "Manager Role",
+                    "required": [ "position", "subordinates" ],
+                    "properties": {
+                        "position": {
+                            "type": "string",
+                            "const": "Manager"
+                        },
+                        "subordinates": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            "minItems": 1
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "title": "Developer Role",
+                    "required": [ "position", "programmingLanguages" ],
+                    "properties": {
+                        "position": {
+                            "type": "string",
+                            "const": "Developer"
+                        },
+                        "programmingLanguages": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "minItems": 1
+                        }
+                    }
+                }
+            ]
+        }
+    },
+    "allOf": [
+        {
+            "if": {
+                "properties": {
+                    "employmentDetails": { "required": [ "salary" ] }
+                }
+            },
+            "then": {
+                "properties": {
+                    "employmentDetails": {
+                        "properties": {
+                            "salary": { "minimum": 40000 }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
