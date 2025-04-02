@@ -2454,10 +2454,10 @@ func UnmarshalAndValidateRequest(r *http.Request, dest any, schemaBytes []byte) 
 }
 
 type Ctx interface {
-	Params(key string) string
-	Query(key string) string
+	Params(key string, defaultVal ...string) string
+	Query(key string, defaultVal ...string) string
 	Body() []byte
-	Get(key string) string
+	Get(key string, defaultVal ...string) string
 	BodyParser(dest interface{}) error
 }
 
