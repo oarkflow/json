@@ -3,6 +3,7 @@ package jsonmap
 import (
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -264,4 +265,26 @@ func Marshal(v any) ([]byte, error) {
 	copy(ret, enc.buf)
 	encoderPool.Put(enc)
 	return ret, nil
+}
+
+// New streaming Encoder implementation.
+type Encoder struct {
+	w   io.Writer
+	enc *encoder
+}
+
+func NewEncoder(w io.Writer) *Encoder {
+	return &Encoder{
+		w:   w,
+		enc: newEncoder(),
+	}
+}
+
+func (e *Encoder) Encode(v any) error {
+	e.enc.reset()
+	if err := e.enc.encode(v); err != nil {
+		return err
+	}
+	_, err := e.w.Write(e.enc.buf)
+	return err
 }

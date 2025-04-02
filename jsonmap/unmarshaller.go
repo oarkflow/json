@@ -3,6 +3,7 @@ package jsonmap
 import (
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -620,4 +621,24 @@ func assignValue(fv reflect.Value, raw any) error {
 		}
 	}
 	return nil
+}
+
+type Decoder struct {
+	r    io.Reader
+	opts DecoderOptions
+}
+
+func NewDecoder(r io.Reader) *Decoder {
+	return &Decoder{
+		r:    r,
+		opts: DecoderOptions{},
+	}
+}
+
+func (d *Decoder) Decode(v any) error {
+	data, err := io.ReadAll(d.r)
+	if err != nil {
+		return err
+	}
+	return UnmarshalWithOptions(data, v, d.opts)
 }
