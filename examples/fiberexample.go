@@ -30,7 +30,7 @@ func schemaValidator(file string) fiber.Handler {
 
 func main() {
 	app := fiber.New()
-	app.Post("/", schemaValidator("schema_request.json"), func(c *fiber.Ctx) error {
+	app.Post("/", schemaValidator("simple_schema.json"), func(c *fiber.Ctx) error {
 		person := c.Locals("person").(models.Person)
 		return c.JSON(person)
 	})
