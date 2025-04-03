@@ -19,7 +19,7 @@ func schemaValidator(file string) fiber.Handler {
 			return err
 		}
 		var p models.Person
-		err = schema.UnmarshalFiberCtx(ctx, &p)
+		err := schema.UnmarshalFiberCtx(ctx, &p)
 		if err != nil {
 			return err
 		}
