@@ -1,0 +1,16 @@
+{
+    "type": "object",
+    "description": "users",
+    "required": [ "user_id" ],
+    "properties": {
+        "last_name": {
+            "type": "string",
+            "default": "'Baniya'"
+        },
+        "user_id": {
+            "type": [ "integer" ],
+            "in": "query"
+        }
+    },
+    "additionalProperties": false
+}

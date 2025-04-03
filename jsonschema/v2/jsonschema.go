@@ -400,14 +400,11 @@ type Schema struct {
 
 type Compiler struct {
 	schemas map[string]*Schema
-	cache   map[string]*Schema
-	cacheMu sync.RWMutex
 }
 
 func NewCompiler() *Compiler {
 	return &Compiler{
 		schemas: make(map[string]*Schema),
-		cache:   make(map[string]*Schema),
 	}
 }
 
@@ -1410,16 +1407,6 @@ func (c *Compiler) Compile(data []byte) (*Schema, error) {
 	if err := jsonmap.Unmarshal(data, &tmp); err != nil {
 		return nil, err
 	}
-	key, err := computeCacheKey(tmp)
-	if err != nil {
-		return nil, err
-	}
-	c.cacheMu.RLock()
-	if schema, ok := c.cache[key]; ok {
-		c.cacheMu.RUnlock()
-		return schema, nil
-	}
-	c.cacheMu.RUnlock()
 	parsed, err := ParseJSON(data)
 	if err != nil {
 		return nil, err
@@ -1428,9 +1415,6 @@ func (c *Compiler) Compile(data []byte) (*Schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.cacheMu.Lock()
-	c.cache[key] = s
-	c.cacheMu.Unlock()
 	return s, nil
 }
 
@@ -1686,6 +1670,19 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 					}
 				}
 				return fmt.Errorf("at %s: missing required field '%s'", instancePath, field)
+			}
+		}
+		// NEW: Check for additional properties not defined in the schema when AdditionalProperties is false.
+		if s.Properties != nil && s.AdditionalProperties != nil &&
+			s.AdditionalProperties.Boolean != nil && !*s.AdditionalProperties.Boolean {
+			var extras []string
+			for key := range obj {
+				if _, exists := (*s.Properties)[key]; !exists {
+					extras = append(extras, key)
+				}
+			}
+			if len(extras) > 0 {
+				return fmt.Errorf("at %s: additional properties not allowed, extra fields: %v", instancePath, extras)
 			}
 		}
 	}
@@ -2404,7 +2401,7 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 	}
 	merged, err := s.SmartUnmarshal(data)
 	if err != nil {
-		return fmt.Errorf("validation failed: %v", err)
+		return err
 	}
 	mergedBytes, err := json.Marshal(merged)
 	if err != nil {
@@ -2552,7 +2549,7 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 	}
 	merged, err := s.SmartUnmarshal(data)
 	if err != nil {
-		return fmt.Errorf("validation failed: %v", err)
+		return err
 	}
 	mergedBytes, err := json.Marshal(merged)
 	if err != nil {

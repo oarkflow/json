@@ -15,3 +15,8 @@ type Person struct {
 	Auth Auth `json:"auth"`
 	Age  int  `json:"age,omitempty"`
 }
+
+type User struct {
+	LastName string `json:"last_name"`
+	UserID   int    `json:"user_id"`
+}
