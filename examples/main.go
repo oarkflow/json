@@ -7,15 +7,10 @@ import (
 	v2 "github.com/oarkflow/json/jsonschema/v2"
 )
 
-var data1 = map[string]any{"last_name": "Alice",
-	"first_name": "Sandral",
-	"name":       "Sandral",
-}
+var data1 = map[string]any{"last_name": "Alice"}
 
 var data2 = map[string]any{
-	"last_name":  "Alice",
-	"first_name": "Sandral",
-	"salary":     "Sandral",
+	"last_name": "Alice",
 }
 
 func main() {
