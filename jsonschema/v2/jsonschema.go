@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/brianvoe/gofakeit/v6"
 	"github.com/oarkflow/date"
@@ -27,6 +28,9 @@ import (
 
 	"github.com/oarkflow/json/jsonmap"
 )
+
+// NEW: Cache for nested keys to avoid repeated strings.Split allocations.
+var nestedKeysCache sync.Map // map[string][]string
 
 func convertValue(val any, expectedType string) (any, error) {
 	switch expectedType {
@@ -273,10 +277,12 @@ func (p *JSONParser) parseNumber() (any, error) {
 		}
 	}
 	numBytes := p.data[start:p.pos]
-	if i, err := strconv.ParseInt(string(numBytes), 10, 64); err == nil {
+	// Use unsafe conversion to convert []byte to string without allocation.
+	numStr := *(*string)(unsafe.Pointer(&numBytes))
+	if i, err := strconv.ParseInt(numStr, 10, 64); err == nil {
 		return i, nil
 	}
-	f, err := strconv.ParseFloat(string(numBytes), 64)
+	f, err := strconv.ParseFloat(numStr, 64)
 	if err != nil {
 		return nil, err
 	}
@@ -2288,7 +2294,13 @@ func selfValidateSchema(schema *Schema) error {
 }
 
 func getNestedValue(m map[string]any, field string) (any, bool) {
-	parts := strings.Split(field, ".")
+	var parts []string
+	if cached, ok := nestedKeysCache.Load(field); ok {
+		parts = cached.([]string)
+	} else {
+		parts = strings.Split(field, ".")
+		nestedKeysCache.Store(field, parts)
+	}
 	var value any = m
 	for _, part := range parts {
 		obj, ok := value.(map[string]any)
