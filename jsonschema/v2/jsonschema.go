@@ -392,10 +392,9 @@ type Schema struct {
 	ReadOnly                  *bool               `json:"readOnly,omitempty"`
 	WriteOnly                 *bool               `json:"writeOnly,omitempty"`
 	Examples                  []any               `json:"examples,omitempty"`
-	In                        *string             `json:"in,omitempty"`
+	In                        []string            `json:"in,omitempty"`
 	Field                     *string             `json:"field,omitempty"`
-	// NEW: add discriminator field per 2020-12 specification
-	Discriminator *Discriminator `json:"discriminator,omitempty"`
+	Discriminator             *Discriminator      `json:"discriminator,omitempty"`
 }
 
 type Compiler struct {
@@ -430,7 +429,7 @@ func inferType(m map[string]any) {
 }
 
 // NEW: Pool compiled regexes to avoid repeated allocations.
-var compiledRegexPool sync.Map // map[string]*regexp.Regexp
+var compiledRegexPool sync.Map
 
 // Global helper functions.
 func getString(m map[string]any, key string) (string, bool) {
@@ -680,7 +679,7 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 	// Mark properties with an "in" field as required.
 	if schema.Properties != nil {
 		for key, prop := range *schema.Properties {
-			if prop.In != nil && *prop.In != "" {
+			if prop.In != nil && len(prop.In) > 0 {
 				if !slices.Contains(schema.Required, key) {
 					schema.Required = append(schema.Required, key)
 				}
@@ -903,8 +902,19 @@ TypeDone:
 			schema.Examples = arr
 		}
 	}
-	if inVal, ok := getString(m, "in"); ok {
-		schema.In = &inVal
+	if inVal, exists := m["in"]; exists {
+		switch val := inVal.(type) {
+		case string:
+			schema.In = []string{val}
+		case []any:
+			var inArr []string
+			for _, item := range val {
+				if s, ok := item.(string); ok {
+					inArr = append(inArr, s)
+				}
+			}
+			schema.In = inArr
+		}
 	}
 	if fieldVal, ok := getString(m, "field"); ok {
 		schema.Field = &fieldVal
@@ -2406,8 +2416,8 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 		data = m
 	} else {
 		in := "body"
-		if s.In != nil && *s.In != "" {
-			in = *s.In
+		if s.In != nil && len(s.In) > 0 {
+			in = s.In[0]
 		}
 		var err error
 		data, err = extractDataFromRequest(r, in, s.Field)
@@ -2429,14 +2439,33 @@ func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
 	return nil
 }
 
+// NEW: helper function to check if slice contains a value.
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 func overrideFromRequest(r *http.Request, data map[string]any, schema *Schema) {
 	for key, propSchema := range *schema.Properties {
-		if propSchema.In != nil && *propSchema.In != "body" {
+		// Only override if a valid "in" is defined and does not include "body".
+		if len(propSchema.In) > 0 && !contains(propSchema.In, "body") {
 			fieldName := key
 			if propSchema.Field != nil && *propSchema.Field != "" {
 				fieldName = *propSchema.Field
 			}
-			if val, err := extractDataFromRequest(r, *propSchema.In, &fieldName); err == nil {
+			var val any
+			// Try each location in order.
+			for _, location := range propSchema.In {
+				if v, err := extractDataFromRequest(r, location, &fieldName); err == nil {
+					val = v
+					break
+				}
+			}
+			if val != nil {
 				if len(propSchema.Type) > 0 {
 					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
 						data[key] = conv
@@ -2444,6 +2473,8 @@ func overrideFromRequest(r *http.Request, data map[string]any, schema *Schema) {
 				} else {
 					data[key] = val
 				}
+			} else {
+				delete(data, key)
 			}
 		}
 		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {
@@ -2554,8 +2585,8 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 		data = m
 	} else {
 		in := "body"
-		if s.In != nil && *s.In != "" {
-			in = *s.In
+		if s.In != nil && len(s.In) > 0 {
+			in = s.In[0]
 		}
 		var err error
 		data, err = extractDataFromFiberCtx(ctx, in, s.Field)
@@ -2579,12 +2610,19 @@ func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
 
 func overrideFromFiberCtx(ctx Ctx, data map[string]any, schema *Schema) {
 	for key, propSchema := range *schema.Properties {
-		if propSchema.In != nil && *propSchema.In != "body" {
+		if len(propSchema.In) > 0 && !contains(propSchema.In, "body") {
 			fieldName := key
 			if propSchema.Field != nil && *propSchema.Field != "" {
 				fieldName = *propSchema.Field
 			}
-			if val, err := extractDataFromFiberCtx(ctx, *propSchema.In, &fieldName); err == nil {
+			var val any
+			for _, location := range propSchema.In {
+				if v, err := extractDataFromFiberCtx(ctx, location, &fieldName); err == nil {
+					val = v
+					break
+				}
+			}
+			if val != nil {
 				if len(propSchema.Type) > 0 {
 					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
 						data[key] = conv
@@ -2592,6 +2630,9 @@ func overrideFromFiberCtx(ctx Ctx, data map[string]any, schema *Schema) {
 				} else {
 					data[key] = val
 				}
+			} else {
+				// Remove value if not found in the designated source.
+				delete(data, key)
 			}
 		}
 		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {

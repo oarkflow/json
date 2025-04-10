@@ -21,12 +21,12 @@
             "properties": {
                 "token": {
                     "type": "string",
-                    "in": "query"
+                    "in": [ "query" ]
                 }
             },
             "required": [ "token" ]
         },
-        "age": { "type": "number", "in": "query" }
+        "age": { "type": "number", "in": "body" }
     },
     "required": [ "name", "age" ]
 }

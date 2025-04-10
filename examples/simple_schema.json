@@ -5,9 +5,14 @@
         "last_name": {
             "type": "string"
         },
+        "token": {
+            "type": "string",
+            "in": "query"
+        },
         "user_id": {
             "type": [ "integer" ]
         }
     },
+    "required": [ "token" ],
     "additionalProperties": false
 }
