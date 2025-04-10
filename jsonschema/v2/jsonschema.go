@@ -2303,6 +2303,19 @@ func getNestedValue(m map[string]any, field string) (any, bool) {
 	return value, true
 }
 
+func extractToken(authHeader string) (authType, token string, err error) {
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 {
+		return "", "", errors.New("invalid authorization header format")
+	}
+	authType = strings.TrimSpace(parts[0])
+	token = strings.TrimSpace(parts[1])
+	if authType == "" || token == "" {
+		return "", "", errors.New("authorization type or token is empty")
+	}
+	return authType, token, nil
+}
+
 func extractDataFromRequest(r *http.Request, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
 	case "query":
@@ -2351,13 +2364,24 @@ func extractDataFromRequest(r *http.Request, in string, field *string) (any, err
 	case "header":
 		m := map[string]any{}
 		for k, v := range r.Header {
-			if len(v) == 1 {
+			if len(v) > 0 {
 				m[k] = v[0]
-			} else {
-				m[k] = v
 			}
 		}
 		if field != nil && *field != "" {
+			if strings.EqualFold(*field, "Authorization") {
+				if val, exists := m["Authorization"]; exists {
+					strVal, _ := val.(string)
+					_, token, err := extractToken(strVal)
+					return token, err
+				}
+			} else if strings.EqualFold(*field, "authorization") {
+				if val, exists := m["authorization"]; exists {
+					strVal, _ := val.(string)
+					_, token, err := extractToken(strVal)
+					return token, err
+				}
+			}
 			if strings.Contains(*field, ".") {
 				if val, exists := getNestedValue(m, *field); exists {
 					return val, nil
@@ -2509,6 +2533,14 @@ func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
 	switch strings.ToLower(in) {
 	case "header":
 		if field != nil && *field != "" {
+			hVal := ctx.Get(*field)
+			if strings.EqualFold(*field, "Authorization") {
+				_, token, err := extractToken(hVal)
+				return token, err
+			} else if strings.EqualFold(*field, "authorization") {
+				_, token, err := extractToken(hVal)
+				return token, err
+			}
 			return ctx.Get(*field), nil
 		}
 		return nil, errors.New("for header extraction, a field name must be provided")

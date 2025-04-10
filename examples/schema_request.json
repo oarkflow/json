@@ -21,7 +21,8 @@
             "properties": {
                 "token": {
                     "type": "string",
-                    "in": [ "query" ]
+                    "in": [ "header" ],
+                    "field": "authorization"
                 }
             },
             "required": [ "token" ]
