@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +17,37 @@ import (
 
 	"github.com/brianvoe/gofakeit/v6"
 )
+
+var regexCache sync.Map
+
+func getCompiledRegex(pattern string) (*regexp.Regexp, error) {
+	if v, ok := regexCache.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	regexCache.Store(pattern, re)
+	return re, nil
+}
+
+func parseJSONPointer(ptr string) ([]string, error) {
+	if ptr == "" {
+		return nil, errors.New("empty JSON pointer")
+	}
+	if ptr[0] != '/' {
+		return nil, errors.New("JSON pointer must start with '/'")
+	}
+	parts := strings.Split(ptr[1:], "/")
+
+	for i, token := range parts {
+		token = strings.ReplaceAll(token, "~1", "/")
+		token = strings.ReplaceAll(token, "~0", "~")
+		parts[i] = token
+	}
+	return parts, nil
+}
 
 var nestedKeysCache sync.Map
 
@@ -37,6 +68,7 @@ func (st *SchemaType) UnmarshalJSON(data []byte) error {
 }
 
 type Rat float64
+
 type SchemaMap map[string]*Schema
 
 type Discriminator struct {
@@ -114,125 +146,6 @@ type Schema struct {
 	In                        []string            `json:"in,omitempty"`
 	Field                     *string             `json:"field,omitempty"`
 	Discriminator             *Discriminator      `json:"discriminator,omitempty"`
-}
-
-func processConditionalRequired(m map[string]any, schema *Schema) {
-
-	ifVal, ifExists := m["if"]
-	thenVal, thenExists := m["then"]
-	if !ifExists || !thenExists {
-		return
-	}
-
-	ifMap, ok := ifVal.(map[string]any)
-	if !ok {
-		return
-	}
-
-	reqFieldsRaw, reqExists := ifMap["required"]
-	if !reqExists {
-		return
-	}
-	reqFields, ok := reqFieldsRaw.([]any)
-	if !ok {
-		return
-	}
-
-	for _, reqFieldRaw := range reqFields {
-		reqField, ok := reqFieldRaw.(string)
-		if !ok || reqField == "" {
-			continue
-		}
-
-		thenMap, ok := thenVal.(map[string]any)
-		if !ok {
-			continue
-		}
-		props, propsExist := thenMap["properties"]
-		if !propsExist {
-			continue
-		}
-		propsMap, ok := props.(map[string]any)
-		if !ok {
-			continue
-		}
-		propSchemaRaw, exists := propsMap[reqField]
-		if !exists {
-			continue
-		}
-		propSchemaMap, ok := propSchemaRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		innerReqRaw, exists := propSchemaMap["required"]
-		if !exists {
-			continue
-		}
-		innerReqArr, ok := innerReqRaw.([]any)
-		if !ok {
-			continue
-		}
-
-		if schema.Properties != nil {
-			if propSchema, exists := (*schema.Properties)[reqField]; exists {
-				for _, fieldRaw := range innerReqArr {
-					fieldStr, ok := fieldRaw.(string)
-					if ok && !slices.Contains(propSchema.Required, fieldStr) {
-						propSchema.Required = append(propSchema.Required, fieldStr)
-					}
-				}
-			}
-		}
-	}
-}
-
-func validateDiscriminator(instance any, s *Schema) error {
-	obj, ok := instance.(map[string]any)
-	if !ok {
-		return errors.New("discriminator: instance is not an object")
-	}
-	discVal, ok := obj[s.Discriminator.PropertyName]
-	if !ok {
-		return fmt.Errorf("discriminator: property '%s' not found", s.Discriminator.PropertyName)
-	}
-	discStr, ok := discVal.(string)
-	if !ok {
-		return fmt.Errorf("discriminator: property '%s' is not a string", s.Discriminator.PropertyName)
-	}
-	var candidate *Schema
-
-	if len(s.Discriminator.Mapping) > 0 {
-		if ref, exists := s.Discriminator.Mapping[discStr]; exists {
-			for _, cand := range s.OneOf {
-				if cand.ID == ref || cand.Ref == ref {
-					candidate = cand
-					break
-				}
-			}
-			if candidate == nil {
-				return fmt.Errorf("discriminator: no candidate schema found with reference %q", ref)
-			}
-		} else {
-			return fmt.Errorf("discriminator: no mapping defined for value %q", discStr)
-		}
-	} else {
-
-		validCount := 0
-		for _, cand := range s.OneOf {
-			if err := cand.Validate(instance); err == nil {
-				candidate = cand
-				validCount++
-			}
-		}
-		if validCount != 1 {
-			return fmt.Errorf("discriminator: expected exactly one valid candidate, got %d", validCount)
-		}
-	}
-	if err := candidate.Validate(instance); err != nil {
-		return fmt.Errorf("discriminator: candidate schema validation failed: %v", err)
-	}
-	return nil
 }
 
 var remoteCache = struct {
@@ -316,15 +229,41 @@ func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	return remoteSchema, nil
 }
 
-func (s *Schema) resolveRef(ref string) (*Schema, error) {
-	if strings.HasPrefix(ref, "#") {
-		anchor := strings.TrimPrefix(ref, "#")
-		for cur := s; cur != nil; cur = cur.parent {
-			if cur.Anchor == anchor {
-				return cur, nil
+func (s *Schema) resolveLocalRef(ptr string) (*Schema, error) {
+	pointer := strings.TrimPrefix(ptr, "#")
+	if pointer == "" {
+		return s, nil
+	}
+	if pointer[0] != '/' {
+		return nil, fmt.Errorf("invalid JSON pointer %q", pointer)
+	}
+	tokens, err := parseJSONPointer(pointer)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing JSON pointer: %v", err)
+	}
+	root := s
+	for root.parent != nil {
+		root = root.parent
+	}
+	cur := root
+	for _, token := range tokens {
+		found := false
+		if cur.anchors != nil {
+			if next, ok := cur.anchors[token]; ok {
+				cur = next
+				found = true
 			}
 		}
-		return nil, fmt.Errorf("unable to resolve reference '%s'", ref)
+		if !found {
+			return nil, fmt.Errorf("unable to resolve token %q", token)
+		}
+	}
+	return cur, nil
+}
+
+func (s *Schema) resolveRef(ref string) (*Schema, error) {
+	if strings.HasPrefix(ref, "#") {
+		return s.resolveLocalRef(ref)
 	}
 	return s.resolveRemoteRef(ref)
 }
@@ -370,7 +309,7 @@ func (s *Schema) findDynamicAnchor(anchor string) *Schema {
 
 func (s *Schema) prepareData(data any) (any, error) {
 	switch data := data.(type) {
-	case map[string]any, []map[string]any, []any, float64, bool, nil:
+	case map[string]any, []any, float64, bool, nil:
 		return data, nil
 	case string:
 		return data, nil
@@ -380,12 +319,16 @@ func (s *Schema) prepareData(data any) (any, error) {
 			return nil, err
 		}
 		var v any
-		err = json.Unmarshal(b, &v)
-		if err != nil {
+		dec := json.NewDecoder(bytes.NewReader(b))
+		if err := dec.Decode(&v); err != nil {
 			return nil, err
 		}
 		return v, nil
 	}
+}
+
+func annotateError(path string, err error) error {
+	return fmt.Errorf("at %s: %w", path, err)
 }
 
 func (s *Schema) validateAsType(candidate string, data any) error {
@@ -498,6 +441,15 @@ func validateSimpleConstraints(data any, s *Schema) error {
 		if s.MinLength != nil && float64(len(str)) < *s.MinLength {
 			return fmt.Errorf("string length %d is less than minLength %v", len(str), *s.MinLength)
 		}
+		if s.Pattern != nil {
+			re, err := getCompiledRegex(*s.Pattern)
+			if err != nil {
+				return fmt.Errorf("invalid pattern: %v", err)
+			}
+			if !re.MatchString(str) {
+				return fmt.Errorf("value %q does not match pattern %q", str, *s.Pattern)
+			}
+		}
 	}
 	if arr, ok := data.([]any); ok {
 		if s.MaxItems != nil && float64(len(arr)) > *s.MaxItems {
@@ -514,26 +466,22 @@ func validateSimpleConstraints(data any, s *Schema) error {
 		if s.MinProperties != nil && float64(len(obj)) < *s.MinProperties {
 			return fmt.Errorf("object has %d properties fewer than minProperties %v", len(obj), *s.MinProperties)
 		}
-	}
-
-	if s.Pattern != nil {
-		if str, ok := data.(string); ok {
-			re, ok := s.compiledPatterns[*s.Pattern]
-			if !ok {
-				var err error
-				re, err = regexp.Compile(*s.Pattern)
-				if err != nil {
-					return fmt.Errorf("invalid pattern: %v", err)
+		if s.PropertyNames != nil {
+			for name := range obj {
+				if err := s.PropertyNames.Validate(name); err != nil {
+					return fmt.Errorf("propertyNames: key %q invalid: %v", name, err)
 				}
-				s.compiledPatterns[*s.Pattern] = re
-			}
-			if !re.MatchString(str) {
-				return fmt.Errorf("value %q does not match pattern %q", str, *s.Pattern)
 			}
 		}
 	}
 	if len(s.Enum) > 0 {
-		found := slices.Contains(s.Enum, data)
+		found := false
+		for _, enumVal := range s.Enum {
+			if enumVal == data {
+				found = true
+				break
+			}
+		}
 		if !found {
 			return fmt.Errorf("value %v not in enum %v", data, s.Enum)
 		}
@@ -553,10 +501,111 @@ func validateSimpleConstraints(data any, s *Schema) error {
 	return nil
 }
 
+func validateDependentSchemas(obj map[string]any, s *Schema) error {
+	for prop, depSchema := range s.DependentSchemas {
+		if _, exists := obj[prop]; exists {
+			if err := depSchema.Validate(obj); err != nil {
+				return fmt.Errorf("dependentSchemas: property %q: %v", prop, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDependentRequired(obj map[string]any, s *Schema) error {
+	for prop, reqFields := range s.DependentRequired {
+		if _, exists := obj[prop]; exists {
+			for _, r := range reqFields {
+				if _, ok := obj[r]; !ok {
+					return fmt.Errorf("dependentRequired: property %q requires field %q", prop, r)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateAdditionalProperties(obj map[string]any, s *Schema) error {
+	if s.Properties == nil {
+		return nil
+	}
+	extras := make([]string, 0)
+	for key := range obj {
+		if _, ok := (*s.Properties)[key]; !ok {
+			matched := false
+			if s.PatternProperties != nil {
+				for pattern := range *s.PatternProperties {
+					re, err := getCompiledRegex(pattern)
+					if err != nil {
+						continue
+					}
+					if re.MatchString(key) {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				if s.AdditionalProperties != nil && s.AdditionalProperties.Boolean != nil && !*s.AdditionalProperties.Boolean {
+					extras = append(extras, key)
+				}
+			}
+		}
+	}
+	if len(extras) > 0 {
+		return fmt.Errorf("additional properties not allowed: %v", extras)
+	}
+	return nil
+}
+
+func validatePatternProperties(obj map[string]any, s *Schema) error {
+	if s.PatternProperties == nil {
+		return nil
+	}
+	for pattern, schema := range *s.PatternProperties {
+		re, err := getCompiledRegex(pattern)
+		if err != nil {
+			return fmt.Errorf("patternProperties: invalid pattern %q: %v", pattern, err)
+		}
+		for key, val := range obj {
+			if re.MatchString(key) {
+				if err := schema.Validate(val); err != nil {
+					return fmt.Errorf("patternProperties: key %q: %v", key, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateUnevaluatedProperties(obj map[string]any, s *Schema) error {
+	if s.UnevaluatedProperties == nil {
+		return nil
+	}
+	for key, val := range obj {
+		if err := s.UnevaluatedProperties.Validate(val); err != nil {
+			return fmt.Errorf("unevaluatedProperties: key %q: %v", key, err)
+		}
+	}
+	return nil
+}
+
+func validateUnevaluatedItems(arr []any, s *Schema) error {
+	if s.UnevaluatedItems == nil {
+		return nil
+	}
+	for i, item := range arr {
+		if err := s.UnevaluatedItems.Validate(item); err != nil {
+			return fmt.Errorf("unevaluatedItems: index %d: %v", i, err)
+		}
+	}
+	return nil
+}
+
 func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	data, err := s.prepareData(unprepared)
 	if err != nil {
-		return fmt.Errorf("at %s: failed to prepare data: %w", instancePath, err)
+		return annotateError(instancePath, fmt.Errorf("failed to prepare data: %w", err))
 	}
 	if obj, ok := data.(map[string]any); ok {
 		for _, field := range s.Required {
@@ -566,29 +615,33 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 						continue
 					}
 				}
-				return fmt.Errorf("at %s: missing required field '%s'", instancePath, field)
+				return annotateError(instancePath, fmt.Errorf("missing required field %q", field))
 			}
 		}
-
-		if s.Properties != nil && s.AdditionalProperties != nil &&
-			s.AdditionalProperties.Boolean != nil && !*s.AdditionalProperties.Boolean {
-			var extras []string
-			for key := range obj {
-				if _, exists := (*s.Properties)[key]; !exists {
-					extras = append(extras, key)
-				}
+		if err := validateDependentSchemas(obj, s); err != nil {
+			return annotateError(instancePath, err)
+		}
+		if err := validateDependentRequired(obj, s); err != nil {
+			return annotateError(instancePath, err)
+		}
+		if s.Properties != nil && s.AdditionalProperties != nil && s.AdditionalProperties.Boolean != nil && !*s.AdditionalProperties.Boolean {
+			if err := validateAdditionalProperties(obj, s); err != nil {
+				return annotateError(instancePath, err)
 			}
-			if len(extras) > 0 {
-				return fmt.Errorf("at %s: additional properties not allowed, extra fields: %v", instancePath, extras)
-			}
+		}
+		if err := validatePatternProperties(obj, s); err != nil {
+			return annotateError(instancePath, err)
+		}
+		if err := validateUnevaluatedProperties(obj, s); err != nil {
+			return annotateError(instancePath, err)
 		}
 	}
 	if err := validateApplicatorKeywords(data, s); err != nil {
-		return fmt.Errorf("at %s: %w", instancePath, err)
+		return annotateError(instancePath, err)
 	}
 	if s.Contains != nil {
 		if err := validateContains(data, s.Contains); err != nil {
-			return fmt.Errorf("at %s: contains validation error: %w", instancePath, err)
+			return annotateError(instancePath, fmt.Errorf("contains validation error: %w", err))
 		}
 	}
 	if len(s.Type) == 0 && s.Properties != nil {
@@ -610,10 +663,18 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 				for key, propSchema := range *s.Properties {
 					if val, exists := obj[key]; exists {
 						if err := propSchema.Validate(val); err != nil {
-							candidateErrors = append(candidateErrors, fmt.Errorf("property '%s' validation failed: %v", key, err))
+							candidateErrors = append(candidateErrors, fmt.Errorf("property %q validation failed: %v", key, err))
 							goto NextCandidate
 						}
 					}
+				}
+			}
+		}
+		if candidate == "array" {
+			if arr, ok := data.([]any); ok {
+				if err := validateUnevaluatedItems(arr, s); err != nil {
+					candidateErrors = append(candidateErrors, fmt.Errorf("array unevaluatedItems: %v", err))
+					goto NextCandidate
 				}
 			}
 		}
@@ -621,7 +682,7 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 	NextCandidate:
 	}
 	if validCandidateCount < 1 {
-		return fmt.Errorf("at %s: data does not match any candidate types %v. Details: %v", instancePath, s.Type, candidateErrors)
+		return annotateError(instancePath, fmt.Errorf("data does not match any candidate types %v; details: %v", s.Type, candidateErrors))
 	}
 	return nil
 }
@@ -689,15 +750,16 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 				if v, exists := obj[key]; exists {
 					merged, err := propSchema.Unmarshal(v)
 					if err != nil {
-						return false, nil, fmt.Errorf("error unmarshalling property '%s': %v", key, err)
+						return false, nil, fmt.Errorf("error unmarshalling property %q: %v", key, err)
 					}
 					newObj[key] = merged
 				} else if propSchema.Default != nil {
-					merged, err := propSchema.Unmarshal(propSchema.Default)
-					if err != nil {
-						return false, nil, fmt.Errorf("error unmarshalling property '%s' with default: %v", key, err)
+
+					if defObj, ok := propSchema.Default.(map[string]any); ok {
+						newObj[key] = defObj
+					} else {
+						newObj[key] = propSchema.Default
 					}
-					newObj[key] = merged
 				}
 			}
 		}
@@ -710,7 +772,7 @@ func (s *Schema) validateType(tp string, data any) (bool, any, error) {
 				}
 				merged, err := s.AdditionalProperties.Unmarshal(val)
 				if err != nil {
-					return false, nil, fmt.Errorf("error unmarshalling additional property '%s': %v", key, err)
+					return false, nil, fmt.Errorf("error unmarshalling additional property %q: %v", key, err)
 				}
 				newObj[key] = merged
 			}
@@ -892,6 +954,275 @@ func (s *Schema) GenerateExample() (any, error) {
 	}
 }
 
+var vocabularyValidators = map[string]func(schema *Schema) error{}
+
+func RegisterVocabularyValidator(name string, validator func(schema *Schema) error) {
+	vocabularyValidators[name] = validator
+}
+
+func checkVocabularyCompliance(schema *Schema) error {
+	for vocab, enabled := range schema.Vocabulary {
+		if enabled {
+			if validator, ok := vocabularyValidators[vocab]; ok {
+				if err := validator(schema); err != nil {
+					return fmt.Errorf("vocabulary %q validation failed: %v", vocab, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+var customKeywordValidators = map[string]func(s *Schema, keywordValue any) error{}
+
+func RegisterCustomKeyword(keyword string, validator func(s *Schema, keywordValue any) error) {
+	customKeywordValidators[keyword] = validator
+}
+
+func processCustomKeywords(m map[string]any, schema *Schema) error {
+	for key, val := range m {
+		if validator, exists := customKeywordValidators[key]; exists {
+			if err := validator(schema, val); err != nil {
+				return fmt.Errorf("custom keyword %q validation failed: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateSubschemas(keyword string, subschemas []*Schema, instance any) error {
+	var errs []string
+	validCount := 0
+	for i, sub := range subschemas {
+		if err := sub.Validate(instance); err != nil {
+			errs = append(errs, fmt.Sprintf("%s[%d]: %v", keyword, i, err))
+		} else {
+			validCount++
+		}
+	}
+	switch keyword {
+	case "allOf":
+		if len(errs) > 0 {
+			return fmt.Errorf("allOf validation errors: %s", strings.Join(errs, "; "))
+		}
+	case "anyOf":
+		if validCount < 1 {
+			return fmt.Errorf("anyOf failed: %s", strings.Join(errs, "; "))
+		}
+	case "oneOf":
+		if validCount != 1 {
+			return fmt.Errorf("oneOf failed: expected exactly 1 valid schema, got %d; details: %s", validCount, strings.Join(errs, "; "))
+		}
+	}
+	return nil
+}
+
+func validateApplicatorKeywords(instance any, s *Schema) error {
+	var errs []string
+	if err := validateSubschemas("allOf", s.AllOf, instance); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(s.AnyOf) > 0 {
+		if err := validateSubschemas("anyOf", s.AnyOf, instance); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(s.OneOf) > 0 {
+		if s.Discriminator != nil {
+			if err := validateDiscriminator(instance, s); err != nil {
+				errs = append(errs, err.Error())
+			}
+		} else {
+			if err := validateSubschemas("oneOf", s.OneOf, instance); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if s.Not != nil {
+		if err := s.Not.Validate(instance); err == nil {
+			errs = append(errs, "not failed: instance must not match the 'not' schema")
+		}
+	}
+	if s.If != nil {
+		if err := s.If.Validate(instance); err == nil {
+			if s.Then != nil {
+				if err := s.Then.Validate(instance); err != nil {
+					errs = append(errs, fmt.Sprintf("then failed: %v", err))
+				}
+			}
+		} else if s.Else != nil {
+			if err := s.Else.Validate(instance); err != nil {
+				errs = append(errs, fmt.Sprintf("else failed: %v", err))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("applicator validation errors: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func validateDiscriminator(instance any, s *Schema) error {
+	obj, ok := instance.(map[string]any)
+	if !ok {
+		return errors.New("discriminator: instance is not an object")
+	}
+	discVal, ok := obj[s.Discriminator.PropertyName]
+	if !ok {
+		return fmt.Errorf("discriminator: property %q not found", s.Discriminator.PropertyName)
+	}
+	discStr, ok := discVal.(string)
+	if !ok {
+		return fmt.Errorf("discriminator: property %q is not a string", s.Discriminator.PropertyName)
+	}
+	var candidate *Schema
+	if len(s.Discriminator.Mapping) > 0 {
+		if ref, exists := s.Discriminator.Mapping[discStr]; exists {
+			for _, cand := range s.OneOf {
+				if cand.ID == ref || cand.Ref == ref {
+					candidate = cand
+					break
+				}
+			}
+			if candidate == nil {
+				return fmt.Errorf("discriminator: no candidate schema found with reference %q", ref)
+			}
+		} else {
+			return fmt.Errorf("discriminator: no mapping defined for value %q", discStr)
+		}
+	} else {
+		validCount := 0
+		for _, cand := range s.OneOf {
+			if err := cand.Validate(instance); err == nil {
+				candidate = cand
+				validCount++
+			}
+		}
+		if validCount != 1 {
+			return fmt.Errorf("discriminator: expected exactly one valid candidate, got %d", validCount)
+		}
+	}
+	if err := candidate.Validate(instance); err != nil {
+		return fmt.Errorf("discriminator: candidate schema validation failed: %v", err)
+	}
+	return nil
+}
+
+func validateContentEncoding(instance any, encoding string) error {
+	if encoding == "base64" {
+		if str, ok := instance.(string); ok {
+			if _, err := base64.StdEncoding.DecodeString(str); err != nil {
+				return fmt.Errorf("contentEncoding 'base64' failed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateContentMediaType(instance any, mediaType string) error {
+	if mediaType == "application/json" {
+		if str, ok := instance.(string); ok {
+			if decoded, err := base64.StdEncoding.DecodeString(str); err == nil {
+				var dummy any
+				if err := json.Unmarshal(decoded, &dummy); err != nil {
+					return fmt.Errorf("contentMediaType 'application/json' failed after base64 decode: %v", err)
+				}
+				return nil
+			}
+			var dummy any
+			if err := json.Unmarshal([]byte(str), &dummy); err != nil {
+				return fmt.Errorf("contentMediaType 'application/json' failed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateContains(instance any, containsSchema *Schema) error {
+	arr, ok := instance.([]any)
+	if !ok {
+		return nil
+	}
+	var found bool
+	var errs []string
+	for i, item := range arr {
+		if err := containsSchema.Validate(item); err == nil {
+			found = true
+			break
+		} else {
+			errs = append(errs, fmt.Sprintf("contains[%d]: %v", i, err))
+		}
+	}
+	if !found {
+		return fmt.Errorf("contains validation failed; no item matches: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
+	dyn, err := s.resolveDynamicRef(ref)
+	if err != nil {
+		return nil, annotateError(ref, fmt.Errorf("dynamic ref resolution failed: %w", err))
+	}
+	return dyn, nil
+}
+
+func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
+	rec, err := s.resolveRecursiveRef(ref)
+	if err != nil {
+		return nil, annotateError(ref, fmt.Errorf("recursive ref resolution failed: %w", err))
+	}
+	return rec, nil
+}
+
+func selfValidateSchema(schema *Schema) error {
+	if schema.Vocabulary != nil {
+		if enabled, ok := schema.Vocabulary["https://json-schema.org/draft/2020-12/vocab/meta-data"]; ok && enabled {
+			if schema.Title != nil && *schema.Title == "" {
+				return errors.New("meta-data: title must not be empty")
+			}
+		}
+	}
+	return nil
+}
+
+func getNestedValue(m map[string]any, field string) (any, bool) {
+	var parts []string
+	if cached, ok := nestedKeysCache.Load(field); ok {
+		parts = cached.([]string)
+	} else {
+		parts = strings.Split(field, ".")
+		nestedKeysCache.Store(field, parts)
+	}
+	value := any(m)
+	for _, part := range parts {
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		value, ok = obj[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+var subschemaSem = make(chan struct{}, 16)
+
+func compileSubschemaAsync(item any, compiler *Compiler, parent *Schema, result chan<- *Schema, errChan chan<- error) {
+	go func() {
+		subschemaSem <- struct{}{}
+		defer func() { <-subschemaSem }()
+		subSchema, err := compileSchema(item, compiler, parent)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		result <- subSchema
+	}()
+}
+
 func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	if len(schemaBytes) == 0 {
 		return json.Unmarshal(data, dest)
@@ -948,230 +1279,6 @@ func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	}
 	if err := json.Unmarshal(mergedBytes, dest); err != nil {
 		return fmt.Errorf("failed to unmarshal merged bytes into dest: %v", err)
-	}
-	return nil
-}
-
-var vocabularyValidators = map[string]func(schema *Schema) error{}
-
-func RegisterVocabularyValidator(name string, validator func(schema *Schema) error) {
-	vocabularyValidators[name] = validator
-}
-
-func checkVocabularyCompliance(schema *Schema) error {
-	for vocab, enabled := range schema.Vocabulary {
-		if enabled {
-			if validator, ok := vocabularyValidators[vocab]; ok {
-				if err := validator(schema); err != nil {
-					return fmt.Errorf("vocabulary '%s' validation failed: %v", vocab, err)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func validateSubschemas(keyword string, subschemas []*Schema, instance any) error {
-	var errs []string
-	validCount := 0
-	for i, sub := range subschemas {
-		if err := sub.Validate(instance); err != nil {
-			errs = append(errs, fmt.Sprintf("%s[%d]: %v", keyword, i, err))
-		} else {
-			validCount++
-		}
-	}
-	switch keyword {
-	case "allOf":
-		if len(errs) > 0 {
-			return fmt.Errorf("allOf validation errors: %s", strings.Join(errs, "; "))
-		}
-	case "anyOf":
-		if validCount < 1 {
-			return fmt.Errorf("anyOf failed: %s", strings.Join(errs, "; "))
-		}
-	case "oneOf":
-		if validCount != 1 {
-			return fmt.Errorf("oneOf failed: expected exactly 1 valid schema, got %d; details: %s", validCount, strings.Join(errs, "; "))
-		}
-	}
-	return nil
-}
-
-func validateApplicatorKeywords(instance any, s *Schema) error {
-	var errs []string
-	if err := validateSubschemas("allOf", s.AllOf, instance); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if len(s.AnyOf) > 0 {
-		if err := validateSubschemas("anyOf", s.AnyOf, instance); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-
-	if len(s.OneOf) > 0 {
-		if s.Discriminator != nil {
-			if err := validateDiscriminator(instance, s); err != nil {
-				errs = append(errs, err.Error())
-			}
-		} else {
-			if err := validateSubschemas("oneOf", s.OneOf, instance); err != nil {
-				errs = append(errs, err.Error())
-			}
-		}
-	}
-	if s.Not != nil {
-		if err := s.Not.Validate(instance); err == nil {
-			errs = append(errs, "not failed: instance must not match the 'not' schema")
-		}
-	}
-	if s.If != nil {
-		if err := s.If.Validate(instance); err == nil {
-			if s.Then != nil {
-				if err := s.Then.Validate(instance); err != nil {
-					errs = append(errs, fmt.Sprintf("then failed: %v", err))
-				}
-			}
-		} else if s.Else != nil {
-			if err := s.Else.Validate(instance); err != nil {
-				errs = append(errs, fmt.Sprintf("else failed: %v", err))
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("applicator validation errors: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func validateContentEncoding(instance any, encoding string) error {
-	if encoding == "base64" {
-		if str, ok := instance.(string); ok {
-			if _, err := base64.StdEncoding.DecodeString(str); err != nil {
-				return fmt.Errorf("contentEncoding 'base64' failed: %v", err)
-			}
-		}
-	}
-	return nil
-}
-
-func validateContentMediaType(instance any, mediaType string) error {
-	if mediaType == "application/json" {
-		if str, ok := instance.(string); ok {
-			if decoded, err := base64.StdEncoding.DecodeString(str); err == nil {
-				var dummy any
-				if err := json.Unmarshal(decoded, &dummy); err != nil {
-					return fmt.Errorf("contentMediaType 'application/json' failed after base64 decode: %v", err)
-				}
-				return nil
-			}
-			var dummy any
-			if err := json.Unmarshal([]byte(str), &dummy); err != nil {
-				return fmt.Errorf("contentMediaType 'application/json' failed: %v", err)
-			}
-		}
-	}
-	return nil
-}
-
-func validateContains(instance any, containsSchema *Schema) error {
-	arr, ok := instance.([]any)
-	if !ok {
-		return nil
-	}
-	var found bool
-	var errs []string
-	for i, item := range arr {
-		if err := containsSchema.Validate(item); err == nil {
-			found = true
-			break
-		} else {
-			errs = append(errs, fmt.Sprintf("contains[%d]: %v", i, err))
-		}
-	}
-	if !found {
-		return fmt.Errorf("contains validation failed; no item matches: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func annotateError(path string, err error) error {
-	return fmt.Errorf("at %s: %w", path, err)
-}
-
-func enhancedResolveDynamicRef(s *Schema, ref string) (*Schema, error) {
-	dyn, err := s.resolveDynamicRef(ref)
-	if err != nil {
-		return nil, annotateError(ref, fmt.Errorf("dynamic ref resolution failed: %w", err))
-	}
-	return dyn, nil
-}
-
-func enhancedResolveRecursiveRef(s *Schema, ref string) (*Schema, error) {
-	rec, err := s.resolveRecursiveRef(ref)
-	if err != nil {
-		return nil, annotateError(ref, fmt.Errorf("recursive ref resolution failed: %w", err))
-	}
-	return rec, nil
-}
-
-func selfValidateSchema(schema *Schema) error {
-	if schema.Vocabulary != nil {
-		if enabled, ok := schema.Vocabulary["https://json-schema.org/draft/2020-12/vocab/meta-data"]; ok && enabled {
-			if schema.Title != nil && *schema.Title == "" {
-				return errors.New("meta-data: title must not be empty")
-			}
-		}
-	}
-	return nil
-}
-
-func getNestedValue(m map[string]any, field string) (any, bool) {
-	var parts []string
-	if cached, ok := nestedKeysCache.Load(field); ok {
-		parts = cached.([]string)
-	} else {
-		parts = strings.Split(field, ".")
-		nestedKeysCache.Store(field, parts)
-	}
-	var value any = m
-	for _, part := range parts {
-		obj, ok := value.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		value, ok = obj[part]
-		if !ok {
-			return nil, false
-		}
-	}
-	return value, true
-}
-
-func compileSubschemaAsync(item any, compiler *Compiler, parent *Schema, result chan<- *Schema, errChan chan<- error) {
-	go func() {
-		subSchema, err := compileSchema(item, compiler, parent)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		result <- subSchema
-	}()
-}
-
-var customKeywordValidators = map[string]func(s *Schema, keywordValue any) error{}
-
-func RegisterCustomKeyword(keyword string, validator func(s *Schema, keywordValue any) error) {
-	customKeywordValidators[keyword] = validator
-}
-
-func processCustomKeywords(m map[string]any, schema *Schema) error {
-	for key, val := range m {
-		if validator, exists := customKeywordValidators[key]; exists {
-			if err := validator(schema, val); err != nil {
-				return fmt.Errorf("custom keyword %q validation failed: %w", key, err)
-			}
-		}
 	}
 	return nil
 }

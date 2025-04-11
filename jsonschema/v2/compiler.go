@@ -339,16 +339,6 @@ func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, erro
 			schema.Properties = &sMap
 		}
 	}
-	// Mark properties with an "in" field as required.
-	if schema.Properties != nil {
-		for key, prop := range *schema.Properties {
-			if prop.In != nil && len(prop.In) > 0 {
-				if !slices.Contains(schema.Required, key) {
-					schema.Required = append(schema.Required, key)
-				}
-			}
-		}
-	}
 	// Process conditional required fields.
 	processConditionalRequired(m, schema)
 
@@ -720,4 +710,79 @@ func compileConditional(m map[string]any, ifKey, thenKey string, parent *Schema,
 		}
 	}
 	return nil
+}
+
+// processConditionalRequired refactors the conditional required logic into clearer steps.
+func processConditionalRequired(m map[string]any, schema *Schema) {
+	// Check if "if" and "then" exist.
+	ifVal, ifExists := m["if"]
+	thenVal, thenExists := m["then"]
+	if !ifExists || !thenExists {
+		return
+	}
+
+	// Convert "if" to a map.
+	ifMap, ok := ifVal.(map[string]any)
+	if !ok {
+		return
+	}
+
+	// Extract required fields from the "if" block.
+	reqFieldsRaw, reqExists := ifMap["required"]
+	if !reqExists {
+		return
+	}
+	reqFields, ok := reqFieldsRaw.([]any)
+	if !ok {
+		return
+	}
+
+	// Process each required field.
+	for _, reqFieldRaw := range reqFields {
+		reqField, ok := reqFieldRaw.(string)
+		if !ok || reqField == "" {
+			continue
+		}
+		// Check if the "then" block defines properties for this required field.
+		thenMap, ok := thenVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		props, propsExist := thenMap["properties"]
+		if !propsExist {
+			continue
+		}
+		propsMap, ok := props.(map[string]any)
+		if !ok {
+			continue
+		}
+		propSchemaRaw, exists := propsMap[reqField]
+		if !exists {
+			continue
+		}
+		propSchemaMap, ok := propSchemaRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		// If the property schema defines its own required fields, add them.
+		innerReqRaw, exists := propSchemaMap["required"]
+		if !exists {
+			continue
+		}
+		innerReqArr, ok := innerReqRaw.([]any)
+		if !ok {
+			continue
+		}
+		// Append each required field from the property schema.
+		if schema.Properties != nil {
+			if propSchema, exists := (*schema.Properties)[reqField]; exists {
+				for _, fieldRaw := range innerReqArr {
+					fieldStr, ok := fieldRaw.(string)
+					if ok && !slices.Contains(propSchema.Required, fieldStr) {
+						propSchema.Required = append(propSchema.Required, fieldStr)
+					}
+				}
+			}
+		}
+	}
 }

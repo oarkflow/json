@@ -11,10 +11,11 @@
                     "type": "string"
                 },
                 "lastName": {
-                    "type": "string"
+                    "type": "string",
+                    "in": "query"
                 }
             },
-            "required": [ "firstName", "lastName" ]
+            "required": [ "firstName" ]
         },
         "auth": {
             "type": "object",

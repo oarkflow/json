@@ -13,6 +13,5 @@
             "type": [ "integer" ]
         }
     },
-    "required": [ "token" ],
     "additionalProperties": false
 }
