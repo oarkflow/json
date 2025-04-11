@@ -1,310 +1,24 @@
 package v2
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/brianvoe/gofakeit/v6"
-	"github.com/oarkflow/date"
-	"github.com/oarkflow/expr"
-
-	"github.com/oarkflow/json/jsonmap"
 )
 
-// NEW: Cache for nested keys to avoid repeated strings.Split allocations.
-var nestedKeysCache sync.Map // map[string][]string
-
-func convertValue(val any, expectedType string) (any, error) {
-	switch expectedType {
-	case "number":
-		switch v := val.(type) {
-		case string:
-			f, err := strconv.ParseFloat(v, 64)
-			if err != nil {
-				return nil, fmt.Errorf("cannot convert %q to number: %v", v, err)
-			}
-			return f, nil
-		default:
-			return val, nil
-		}
-	case "integer":
-		switch v := val.(type) {
-		case string:
-			i, err := strconv.Atoi(v)
-			if err != nil {
-				return nil, fmt.Errorf("cannot convert %q to integer: %v", v, err)
-			}
-			return i, nil
-		default:
-			return val, nil
-		}
-	case "boolean":
-		switch v := val.(type) {
-		case string:
-			if v == "true" {
-				return true, nil
-			} else if v == "false" {
-				return false, nil
-			}
-			return nil, fmt.Errorf("cannot convert %q to boolean", v)
-		default:
-			return val, nil
-		}
-	default:
-		return val, nil
-	}
-}
-
-type JSONParser struct {
-	data []byte
-	pos  int
-}
-
-func (p *JSONParser) skipWhitespace() {
-	for p.pos < len(p.data) {
-		switch p.data[p.pos] {
-		case ' ', '\n', '\t', '\r':
-			p.pos++
-		default:
-			return
-		}
-	}
-}
-
-func (p *JSONParser) parseValue() (any, error) {
-	p.skipWhitespace()
-	if p.pos >= len(p.data) {
-		return nil, errors.New("unexpected end of input")
-	}
-	ch := p.data[p.pos]
-	switch ch {
-	case '{':
-		return p.parseObject()
-	case '[':
-		return p.parseArray()
-	case '"':
-		return p.parseString()
-	case 't':
-		return p.parseLiteral("true", true)
-	case 'f':
-		return p.parseLiteral("false", false)
-	case 'n':
-		return p.parseLiteral("null", nil)
-	default:
-		if ch == '-' || (ch >= '0' && ch <= '9') {
-			return p.parseNumber()
-		}
-	}
-	return nil, fmt.Errorf("unexpected character '%c' at position %d", ch, p.pos)
-}
-
-func (p *JSONParser) parseLiteral(lit string, value any) (any, error) {
-	end := p.pos + len(lit)
-	if end > len(p.data) || string(p.data[p.pos:end]) != lit {
-		return nil, fmt.Errorf("invalid literal at position %d", p.pos)
-	}
-	p.pos += len(lit)
-	return value, nil
-}
-
-func (p *JSONParser) parseObject() (any, error) {
-	obj := make(map[string]any)
-	p.pos++
-	p.skipWhitespace()
-	if p.pos < len(p.data) && p.data[p.pos] == '}' {
-		p.pos++
-		return obj, nil
-	}
-	for {
-		p.skipWhitespace()
-		if p.pos >= len(p.data) || p.data[p.pos] != '"' {
-			return nil, errors.New("expected string key in object")
-		}
-		key, err := p.parseString()
-		if err != nil {
-			return nil, err
-		}
-		p.skipWhitespace()
-		if p.pos >= len(p.data) || p.data[p.pos] != ':' {
-			return nil, errors.New("expected ':' after key in object")
-		}
-		p.pos++
-		p.skipWhitespace()
-		value, err := p.parseValue()
-		if err != nil {
-			return nil, err
-		}
-		obj[key] = value
-		p.skipWhitespace()
-		if p.pos < len(p.data) && p.data[p.pos] == '}' {
-			p.pos++
-			break
-		}
-		if p.pos < len(p.data) && p.data[p.pos] == ',' {
-			p.pos++
-			continue
-		}
-		return nil, errors.New("expected ',' or '}' in object")
-	}
-	return obj, nil
-}
-
-func (p *JSONParser) parseArray() (any, error) {
-	arr := []any{}
-	p.pos++
-	p.skipWhitespace()
-	if p.pos < len(p.data) && p.data[p.pos] == ']' {
-		p.pos++
-		return arr, nil
-	}
-	for {
-		p.skipWhitespace()
-		value, err := p.parseValue()
-		if err != nil {
-			return nil, err
-		}
-		arr = append(arr, value)
-		p.skipWhitespace()
-		if p.pos < len(p.data) && p.data[p.pos] == ']' {
-			p.pos++
-			break
-		}
-		if p.pos < len(p.data) && p.data[p.pos] == ',' {
-			p.pos++
-			continue
-		}
-		return nil, errors.New("expected ',' or ']' in array")
-	}
-	return arr, nil
-}
-
-func (p *JSONParser) parseString() (string, error) {
-	if p.data[p.pos] != '"' {
-		return "", errors.New("expected '\"' at beginning of string")
-	}
-	p.pos++
-	var result []rune
-	for p.pos < len(p.data) {
-		ch := p.data[p.pos]
-		if ch == '"' {
-			p.pos++
-			return string(result), nil
-		}
-		if ch == '\\' {
-			p.pos++
-			if p.pos >= len(p.data) {
-				return "", errors.New("unexpected end of input in string escape")
-			}
-			esc := p.data[p.pos]
-			if esc == 'u' {
-				if p.pos+4 >= len(p.data) {
-					return "", errors.New("incomplete unicode escape")
-				}
-				hexStr := string(p.data[p.pos+1 : p.pos+5])
-				code, err := strconv.ParseInt(hexStr, 16, 32)
-				if err != nil {
-					return "", fmt.Errorf("invalid unicode escape: %v", err)
-				}
-				result = append(result, rune(code))
-				p.pos += 5
-				continue
-			}
-			switch esc {
-			case '"', '\\', '/':
-				result = append(result, rune(esc))
-			case 'b':
-				result = append(result, '\b')
-			case 'f':
-				result = append(result, '\f')
-			case 'n':
-				result = append(result, '\n')
-			case 'r':
-				result = append(result, '\r')
-			case 't':
-				result = append(result, '\t')
-			default:
-				return "", fmt.Errorf("invalid escape character '%c'", esc)
-			}
-			p.pos++
-		} else {
-			result = append(result, rune(ch))
-			p.pos++
-		}
-	}
-	return "", errors.New("unexpected end of string")
-}
-
-// NEW: Optimize parseNumber to reduce allocations.
-func (p *JSONParser) parseNumber() (any, error) {
-	start := p.pos
-	if p.data[p.pos] == '-' {
-		p.pos++
-	}
-	for p.pos < len(p.data) && (p.data[p.pos] >= '0' && p.data[p.pos] <= '9') {
-		p.pos++
-	}
-	if p.pos < len(p.data) && p.data[p.pos] == '.' {
-		p.pos++
-		for p.pos < len(p.data) && (p.data[p.pos] >= '0' && p.data[p.pos] <= '9') {
-			p.pos++
-		}
-	}
-	if p.pos < len(p.data) && (p.data[p.pos] == 'e' || p.data[p.pos] == 'E') {
-		p.pos++
-		if p.pos < len(p.data) && (p.data[p.pos] == '+' || p.data[p.pos] == '-') {
-			p.pos++
-		}
-		for p.pos < len(p.data) && (p.data[p.pos] >= '0' && p.data[p.pos] <= '9') {
-			p.pos++
-		}
-	}
-	numBytes := p.data[start:p.pos]
-	// Use unsafe conversion to convert []byte to string without allocation.
-	numStr := *(*string)(unsafe.Pointer(&numBytes))
-	if i, err := strconv.ParseInt(numStr, 10, 64); err == nil {
-		return i, nil
-	}
-	f, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
-var jsonParserPool = sync.Pool{
-	New: func() interface{} {
-		return &JSONParser{}
-	},
-}
-
-func ParseJSON(data []byte) (any, error) {
-	parser := jsonParserPool.Get().(*JSONParser)
-	parser.data = data
-	parser.pos = 0
-	ret, err := parser.parseValue()
-
-	parser.data = nil
-	jsonParserPool.Put(parser)
-	return ret, err
-}
+var nestedKeysCache sync.Map
 
 type SchemaType []string
 
@@ -325,7 +39,6 @@ func (st *SchemaType) UnmarshalJSON(data []byte) error {
 type Rat float64
 type SchemaMap map[string]*Schema
 
-// NEW: add discriminator struct
 type Discriminator struct {
 	PropertyName string            `json:"propertyName"`
 	Mapping      map[string]string `json:"mapping,omitempty"`
@@ -403,672 +116,19 @@ type Schema struct {
 	Discriminator             *Discriminator      `json:"discriminator,omitempty"`
 }
 
-type Compiler struct {
-	schemas map[string]*Schema
-	cache   map[string]*Schema
-	cacheMu sync.RWMutex
-}
-
-func NewCompiler() *Compiler {
-	return &Compiler{
-		schemas: make(map[string]*Schema),
-		cache:   make(map[string]*Schema),
-	}
-}
-
-func inferType(m map[string]any) {
-	if _, exists := m["pattern"]; exists {
-		if _, hasType := m["type"]; !hasType {
-			m["type"] = "string"
-		}
-	}
-	if _, exists := m["minItems"]; exists || m["maxItems"] != nil {
-		if _, hasType := m["type"]; !hasType {
-			m["type"] = "array"
-		}
-	}
-	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
-		if _, hasType := m["type"]; !hasType {
-			m["type"] = "number"
-		}
-	}
-}
-
-// NEW: Pool compiled regexes to avoid repeated allocations.
-var compiledRegexPool sync.Map
-
-// Global helper functions.
-func getString(m map[string]any, key string) (string, bool) {
-	if val, exists := m[key]; exists {
-		if str, ok := val.(string); ok {
-			return str, true
-		}
-	}
-	return "", false
-}
-
-func getMap(m map[string]any, key string) (map[string]any, bool) {
-	if val, exists := m[key]; exists {
-		if mp, ok := val.(map[string]any); ok {
-			return mp, true
-		}
-	}
-	return nil, false
-}
-
-func getFloat(m map[string]any, key string) (float64, bool) {
-	if val, exists := m[key]; exists {
-		return toFloat(val)
-	}
-	return 0, false
-}
-
-func compileSchema(value any, compiler *Compiler, parent *Schema) (*Schema, error) {
-	// Handle boolean schema shortcut.
-	if b, ok := value.(bool); ok {
-		return &Schema{
-			Boolean:  &b,
-			compiler: compiler,
-			parent:   parent,
-		}, nil
-	}
-
-	m, ok := value.(map[string]any)
-	if !ok {
-		return nil, errors.New("schema must be an object or boolean")
-	}
-
-	inferType(m)
-
-	// Migrate "definitions" to "$defs" if needed.
-	if defs, exists := m["definitions"]; exists && m["$defs"] == nil {
-		m["$defs"] = defs
-	}
-
-	// Process legacy "dependencies" field.
-	if dep, exists := m["dependencies"]; exists {
-		if depMap, ok := dep.(map[string]any); ok {
-			for key, val := range depMap {
-				switch v := val.(type) {
-				case []any:
-					if m["dependentRequired"] == nil {
-						m["dependentRequired"] = map[string]any{}
-					}
-					m["dependentRequired"].(map[string]any)[key] = v
-				case map[string]any:
-					if m["dependentSchemas"] == nil {
-						m["dependentSchemas"] = map[string]any{}
-					}
-					m["dependentSchemas"].(map[string]any)[key] = v
-				}
-			}
-		}
-	}
-
-	// Initialize a new schema instance.
-	schema := &Schema{
-		compiler:         compiler,
-		parent:           parent,
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		anchors:          make(map[string]*Schema),
-		dynamicAnchors:   make(map[string]*Schema),
-	}
-
-	// Process core keywords.
-	if id, ok := getString(m, "$id"); ok {
-		schema.ID = id
-	}
-	if s, ok := getString(m, "$schema"); ok {
-		schema.Schema = s
-	}
-	if format, ok := getString(m, "format"); ok {
-		schema.Format = &format
-	}
-	if ref, ok := getString(m, "$ref"); ok {
-		schema.Ref = ref
-	}
-	if dynRef, ok := getString(m, "$dynamicRef"); ok {
-		schema.DynamicRef = dynRef
-	}
-	if recRef, ok := getString(m, "$recursiveRef"); ok {
-		schema.RecursiveRef = recRef
-	}
-	if anchor, ok := getString(m, "$anchor"); ok {
-		schema.Anchor = anchor
-		if parent != nil {
-			if parent.anchors == nil {
-				parent.anchors = make(map[string]*Schema)
-			}
-			parent.anchors[anchor] = schema
-		}
-	}
-	if recAnchorVal, exists := m["$recursiveAnchor"]; exists {
-		if recAnchorBool, ok := recAnchorVal.(bool); ok {
-			schema.RecursiveAnchor = recAnchorBool
-		}
-	}
-	if dynAnchor, ok := getString(m, "$dynamicAnchor"); ok {
-		schema.DynamicAnchor = dynAnchor
-		if parent != nil {
-			if parent.dynamicAnchors == nil {
-				parent.dynamicAnchors = make(map[string]*Schema)
-			}
-			parent.dynamicAnchors[dynAnchor] = schema
-		}
-	}
-	if comment, ok := getString(m, "$comment"); ok {
-		schema.Comment = &comment
-	}
-
-	// Process $vocabulary.
-	if vocabRaw, exists := m["$vocabulary"]; exists {
-		if vocabMap, ok := vocabRaw.(map[string]any); ok {
-			schema.Vocabulary = make(map[string]bool)
-			for k, v := range vocabMap {
-				if b, ok := v.(bool); ok {
-					schema.Vocabulary[k] = b
-				}
-			}
-			if err := checkVocabularyCompliance(schema); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Process subschema definitions.
-	if defs, ok := getMap(m, "$defs"); ok {
-		schema.Defs = make(map[string]*Schema)
-		for key, defVal := range defs {
-			compiledDef, err := compileSchema(defVal, compiler, schema)
-			if err != nil {
-				return nil, fmt.Errorf("error compiling $defs[%s]: %v", key, err)
-			}
-			schema.Defs[key] = compiledDef
-		}
-	}
-
-	// Process combinator keywords.
-	if err := compileSubschemaArray(m, "allOf", compiler, schema, &schema.AllOf); err != nil {
-		return nil, fmt.Errorf("error compiling allOf: %v", err)
-	}
-	if err := compileSubschemaArray(m, "anyOf", compiler, schema, &schema.AnyOf); err != nil {
-		return nil, fmt.Errorf("error compiling anyOf: %v", err)
-	}
-	if err := compileSubschemaArray(m, "oneOf", compiler, schema, &schema.OneOf); err != nil {
-		return nil, fmt.Errorf("error compiling oneOf: %v", err)
-	}
-	if notVal, exists := m["not"]; exists {
-		subSchema, err := compileSchema(notVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling not: %v", err)
-		}
-		schema.Not = subSchema
-	}
-	if err := compileConditional(m, "if", "then", schema, compiler, &schema.If, &schema.Then); err != nil {
-		return nil, err
-	}
-	if elseVal, exists := m["else"]; exists {
-		subSchema, err := compileSchema(elseVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling else: %v", err)
-		}
-		schema.Else = subSchema
-	}
-
-	// Process dependent schemas and required.
-	if depSchemas, ok := getMap(m, "dependentSchemas"); ok {
-		schema.DependentSchemas = make(map[string]*Schema)
-		for key, depVal := range depSchemas {
-			subSchema, err := compileSchema(depVal, compiler, schema)
-			if err != nil {
-				return nil, fmt.Errorf("error compiling dependentSchemas[%s]: %v", key, err)
-			}
-			schema.DependentSchemas[key] = subSchema
-		}
-	}
-	// Process dependentRequired (only once; it may have been set by "dependencies").
-	if depReqRaw, exists := m["dependentRequired"]; exists {
-		if depMap, ok := depReqRaw.(map[string]any); ok {
-			schema.DependentRequired = make(map[string][]string)
-			for key, val := range depMap {
-				if arr, ok := val.([]any); ok {
-					for _, item := range arr {
-						if str, ok := item.(string); ok {
-							schema.DependentRequired[key] = append(schema.DependentRequired[key], str)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Process array-related subschemas.
-	if err := compileSubschemaArray(m, "prefixItems", compiler, schema, &schema.PrefixItems); err != nil {
-		return nil, fmt.Errorf("error compiling prefixItems: %v", err)
-	}
-	if itemsVal, exists := m["items"]; exists {
-		subSchema, err := compileSchema(itemsVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling items: %v", err)
-		}
-		schema.Items = subSchema
-	}
-	if unevaluatedItems, exists := m["unevaluatedItems"]; exists {
-		subSchema, err := compileSchema(unevaluatedItems, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling unevaluatedItems: %v", err)
-		}
-		schema.UnevaluatedItems = subSchema
-	}
-	if containsVal, exists := m["contains"]; exists {
-		subSchema, err := compileSchema(containsVal, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling contains: %v", err)
-		}
-		schema.Contains = subSchema
-	}
-
-	// Process properties.
-	if propsRaw, exists := m["properties"]; exists {
-		if propsMap, ok := propsRaw.(map[string]any); ok {
-			sMap := SchemaMap{}
-			for key, propVal := range propsMap {
-				subSchema, err := compileSchema(propVal, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling properties[%s]: %v", key, err)
-				}
-				sMap[key] = subSchema
-			}
-			schema.Properties = &sMap
-		}
-	}
-	// Mark properties with an "in" field as required.
-	if schema.Properties != nil {
-		for key, prop := range *schema.Properties {
-			if prop.In != nil && len(prop.In) > 0 {
-				if !slices.Contains(schema.Required, key) {
-					schema.Required = append(schema.Required, key)
-				}
-			}
-		}
-	}
-	// Process conditional required fields.
-	processConditionalRequired(m, schema)
-
-	// Process patternProperties.
-	if patProps, exists := m["patternProperties"]; exists {
-		if patMap, ok := patProps.(map[string]any); ok {
-			sMap := SchemaMap{}
-			for pattern, patVal := range patMap {
-				subSchema, err := compileSchema(patVal, compiler, schema)
-				if err != nil {
-					return nil, fmt.Errorf("error compiling patternProperties[%s]: %v", pattern, err)
-				}
-				sMap[pattern] = subSchema
-				// Use pooled regex to avoid recompilation.
-				var re *regexp.Regexp
-				if cached, ok := compiledRegexPool.Load(pattern); ok {
-					re = cached.(*regexp.Regexp)
-				} else {
-					re, err = regexp.Compile(pattern)
-					if err != nil {
-						return nil, fmt.Errorf("invalid pattern regex '%s': %v", pattern, err)
-					}
-					compiledRegexPool.Store(pattern, re)
-				}
-				schema.compiledPatterns[pattern] = re
-			}
-			schema.PatternProperties = &sMap
-		}
-	}
-
-	// Process additionalProperties and propertyNames.
-	if addProps, exists := m["additionalProperties"]; exists {
-		subSchema, err := compileSchema(addProps, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling additionalProperties: %v", err)
-		}
-		schema.AdditionalProperties = subSchema
-	}
-	if propNames, exists := m["propertyNames"]; exists {
-		subSchema, err := compileSchema(propNames, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling propertyNames: %v", err)
-		}
-		schema.PropertyNames = subSchema
-	}
-	if up, exists := m["unevaluatedProperties"]; exists {
-		switch v := up.(type) {
-		case bool:
-			schema.UnevaluatedPropertiesBool = &v
-		default:
-			subSchema, err := compileSchema(v, compiler, schema)
-			if err != nil {
-				return nil, fmt.Errorf("error compiling unevaluatedProperties: %v", err)
-			}
-			schema.UnevaluatedProperties = subSchema
-		}
-	}
-
-	// Process type.
-	if t, exists := m["type"]; exists {
-		switch v := t.(type) {
-		case string:
-			schema.Type = SchemaType{v}
-		case []any:
-			var types []string
-			for _, elem := range v {
-				if str, ok := elem.(string); ok {
-					types = append(types, str)
-				}
-			}
-			// Prefer "array" if present.
-			for _, typ := range types {
-				if typ == "array" {
-					schema.Type = SchemaType{typ}
-					goto TypeDone
-				}
-			}
-			schema.Type = SchemaType(types)
-		}
-	}
-TypeDone:
-	if schema.Pattern != nil && len(schema.Type) == 0 {
-		schema.Type = SchemaType{"string"}
-	}
-
-	// Process enum and const.
-	if enumVal, exists := m["enum"]; exists {
-		if enumArr, ok := enumVal.([]any); ok {
-			schema.Enum = enumArr
-		}
-	}
-	if constVal, exists := m["const"]; exists {
-		schema.Const = constVal
-	}
-
-	// Process numeric validations.
-	if num, ok := getFloat(m, "multipleOf"); ok {
-		r := Rat(num)
-		schema.MultipleOf = &r
-	}
-	if num, ok := getFloat(m, "maximum"); ok {
-		r := Rat(num)
-		schema.Maximum = &r
-	}
-	if num, ok := getFloat(m, "exclusiveMaximum"); ok {
-		r := Rat(num)
-		schema.ExclusiveMaximum = &r
-	}
-	if num, ok := getFloat(m, "minimum"); ok {
-		r := Rat(num)
-		schema.Minimum = &r
-	}
-	if num, ok := getFloat(m, "exclusiveMinimum"); ok {
-		r := Rat(num)
-		schema.ExclusiveMinimum = &r
-	}
-	if num, ok := getFloat(m, "maxLength"); ok {
-		schema.MaxLength = &num
-	}
-	if num, ok := getFloat(m, "minLength"); ok {
-		schema.MinLength = &num
-	}
-	if patStr, ok := getString(m, "pattern"); ok {
-		schema.Pattern = &patStr
-		re, err := regexp.Compile(patStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid pattern regex '%s': %v", patStr, err)
-		}
-		schema.compiledPatterns[patStr] = re
-	}
-
-	// Process array length and uniqueness.
-	if num, ok := getFloat(m, "maxItems"); ok {
-		schema.MaxItems = &num
-	}
-	if num, ok := getFloat(m, "minItems"); ok {
-		schema.MinItems = &num
-	}
-	if unique, exists := m["uniqueItems"]; exists {
-		if b, ok := unique.(bool); ok {
-			schema.UniqueItems = &b
-		}
-	}
-	if num, ok := getFloat(m, "maxContains"); ok {
-		schema.MaxContains = &num
-	}
-	if num, ok := getFloat(m, "minContains"); ok {
-		schema.MinContains = &num
-	}
-
-	// Process object property counts.
-	if num, ok := getFloat(m, "maxProperties"); ok {
-		schema.MaxProperties = &num
-	}
-	if num, ok := getFloat(m, "minProperties"); ok {
-		schema.MinProperties = &num
-	}
-	if reqArr, exists := m["required"]; exists {
-		if arr, ok := reqArr.([]any); ok {
-			for _, item := range arr {
-				if str, ok := item.(string); ok {
-					schema.Required = append(schema.Required, str)
-				}
-			}
-		}
-	}
-
-	// Process content keywords.
-	if s, ok := getString(m, "contentEncoding"); ok {
-		schema.ContentEncoding = &s
-	}
-	if s, ok := getString(m, "contentMediaType"); ok {
-		schema.ContentMediaType = &s
-	}
-	if cs, exists := m["contentSchema"]; exists {
-		subSchema, err := compileSchema(cs, compiler, schema)
-		if err != nil {
-			return nil, fmt.Errorf("error compiling contentSchema: %v", err)
-		}
-		schema.ContentSchema = subSchema
-	}
-
-	// Process documentation keywords.
-	if s, ok := getString(m, "title"); ok {
-		schema.Title = &s
-	}
-	if s, ok := getString(m, "description"); ok {
-		schema.Description = &s
-	}
-	if def, exists := m["default"]; exists {
-		d, err := prepareDefault(def)
-		if err != nil {
-			return nil, err
-		}
-		schema.Default = d
-	}
-	if dep, exists := m["deprecated"]; exists {
-		if b, ok := dep.(bool); ok {
-			schema.Deprecated = &b
-		}
-	}
-	if readOnly, exists := m["readOnly"]; exists {
-		if b, ok := readOnly.(bool); ok {
-			schema.ReadOnly = &b
-		}
-	}
-	if writeOnly, exists := m["writeOnly"]; exists {
-		if b, ok := writeOnly.(bool); ok {
-			schema.WriteOnly = &b
-		}
-	}
-	if examples, exists := m["examples"]; exists {
-		if arr, ok := examples.([]any); ok {
-			schema.Examples = arr
-		}
-	}
-	if inVal, exists := m["in"]; exists {
-		switch val := inVal.(type) {
-		case string:
-			schema.In = []string{val}
-		case []any:
-			var inArr []string
-			for _, item := range val {
-				if s, ok := item.(string); ok {
-					inArr = append(inArr, s)
-				}
-			}
-			schema.In = inArr
-		}
-	}
-	if fieldVal, ok := getString(m, "field"); ok {
-		schema.Field = &fieldVal
-	}
-
-	// Override type to "number" if numeric validations exist.
-	if m["minimum"] != nil || m["maximum"] != nil || m["exclusiveMinimum"] != nil || m["exclusiveMaximum"] != nil {
-		schema.Type = SchemaType{"number"}
-	}
-	// Override type to "object" if properties exist.
-	if schema.Properties != nil {
-		schema.Type = SchemaType{"object"}
-	}
-
-	// Register schema by its ID.
-	if schema.ID != "" {
-		compiler.schemas[schema.ID] = schema
-	}
-
-	// Infer union types from oneOf/anyOf if type is still undefined.
-	if len(schema.Type) == 0 {
-		var unionTypes []string
-		for _, candidates := range [][]*Schema{schema.OneOf, schema.AnyOf} {
-			for _, candidate := range candidates {
-				if len(candidate.Type) > 0 {
-					for _, t := range candidate.Type {
-						if !slices.Contains(unionTypes, t) {
-							unionTypes = append(unionTypes, t)
-						}
-					}
-				}
-			}
-		}
-		if len(unionTypes) > 0 {
-			schema.Type = SchemaType(unionTypes)
-		} else if schema.Properties != nil || schema.If != nil || schema.Then != nil || schema.Else != nil {
-			schema.Type = SchemaType{"object"}
-		}
-	}
-
-	// Process Draft2020 keywords and perform self‑validation.
-	if err := compileDraft2020Keywords(m, schema); err != nil {
-		return nil, err
-	}
-	if err := selfValidateSchema(schema); err != nil {
-		return nil, fmt.Errorf("schema self‑validation failed: %w", err)
-	}
-
-	// Process discriminator.
-	if disc, exists := m["discriminator"]; exists {
-		if d, ok := disc.(map[string]any); ok {
-			prop, ok := d["propertyName"].(string)
-			if !ok || prop == "" {
-				return nil, errors.New("discriminator: propertyName must be a non‑empty string")
-			}
-			mapping := make(map[string]string)
-			if mapp, ok := d["mapping"].(map[string]any); ok {
-				for k, v := range mapp {
-					if str, ok := v.(string); ok {
-						mapping[k] = str
-					}
-				}
-			}
-			schema.Discriminator = &Discriminator{
-				PropertyName: prop,
-				Mapping:      mapping,
-			}
-		} else {
-			return nil, errors.New("discriminator must be an object")
-		}
-	}
-
-	return schema, nil
-}
-
-// compileSubschemaArray processes keywords whose value is an array of subschemas.
-func compileSubschemaArray(m map[string]any, key string, compiler *Compiler, parent *Schema, target *[]*Schema) error {
-	raw, exists := m[key]
-	if !exists {
-		return nil
-	}
-	arr, ok := raw.([]any)
-	if !ok {
-		return fmt.Errorf("%s must be an array", key)
-	}
-	// For "allOf", use asynchronous compilation.
-	if key == "allOf" {
-		resultChan := make(chan *Schema, len(arr))
-		errChan := make(chan error, len(arr))
-		for _, item := range arr {
-			compileSubschemaAsync(item, compiler, parent, resultChan, errChan)
-		}
-		for i := 0; i < len(arr); i++ {
-			select {
-			case subSchema := <-resultChan:
-				*target = append(*target, subSchema)
-			case err := <-errChan:
-				return err
-			}
-		}
-	} else {
-		// Synchronous compilation for anyOf, oneOf, prefixItems, etc.
-		for _, item := range arr {
-			subSchema, err := compileSchema(item, compiler, parent)
-			if err != nil {
-				return err
-			}
-			*target = append(*target, subSchema)
-		}
-	}
-	return nil
-}
-
-// compileConditional compiles the "if" and "then" keywords together.
-func compileConditional(m map[string]any, ifKey, thenKey string, parent *Schema, compiler *Compiler, ifTarget, thenTarget **Schema) error {
-	if ifVal, exists := m[ifKey]; exists {
-		subSchema, err := compileSchema(ifVal, compiler, parent)
-		if err != nil {
-			return fmt.Errorf("error compiling %s: %v", ifKey, err)
-		}
-		*ifTarget = subSchema
-		if thenVal, exists2 := m[thenKey]; exists2 {
-			subSchema, err := compileSchema(thenVal, compiler, parent)
-			if err != nil {
-				return fmt.Errorf("error compiling %s: %v", thenKey, err)
-			}
-			*thenTarget = subSchema
-		}
-	}
-	return nil
-}
-
-// processConditionalRequired refactors the conditional required logic into clearer steps.
 func processConditionalRequired(m map[string]any, schema *Schema) {
-	// Check if "if" and "then" exist.
+
 	ifVal, ifExists := m["if"]
 	thenVal, thenExists := m["then"]
 	if !ifExists || !thenExists {
 		return
 	}
 
-	// Convert "if" to a map.
 	ifMap, ok := ifVal.(map[string]any)
 	if !ok {
 		return
 	}
 
-	// Extract required fields from the "if" block.
 	reqFieldsRaw, reqExists := ifMap["required"]
 	if !reqExists {
 		return
@@ -1078,13 +138,12 @@ func processConditionalRequired(m map[string]any, schema *Schema) {
 		return
 	}
 
-	// Process each required field.
 	for _, reqFieldRaw := range reqFields {
 		reqField, ok := reqFieldRaw.(string)
 		if !ok || reqField == "" {
 			continue
 		}
-		// Check if the "then" block defines properties for this required field.
+
 		thenMap, ok := thenVal.(map[string]any)
 		if !ok {
 			continue
@@ -1105,7 +164,7 @@ func processConditionalRequired(m map[string]any, schema *Schema) {
 		if !ok {
 			continue
 		}
-		// If the property schema defines its own required fields, add them.
+
 		innerReqRaw, exists := propSchemaMap["required"]
 		if !exists {
 			continue
@@ -1114,7 +173,7 @@ func processConditionalRequired(m map[string]any, schema *Schema) {
 		if !ok {
 			continue
 		}
-		// Append each required field from the property schema.
+
 		if schema.Properties != nil {
 			if propSchema, exists := (*schema.Properties)[reqField]; exists {
 				for _, fieldRaw := range innerReqArr {
@@ -1128,7 +187,6 @@ func processConditionalRequired(m map[string]any, schema *Schema) {
 	}
 }
 
-// NEW: add helper function for discriminator-based validation
 func validateDiscriminator(instance any, s *Schema) error {
 	obj, ok := instance.(map[string]any)
 	if !ok {
@@ -1143,7 +201,7 @@ func validateDiscriminator(instance any, s *Schema) error {
 		return fmt.Errorf("discriminator: property '%s' is not a string", s.Discriminator.PropertyName)
 	}
 	var candidate *Schema
-	// If mapping provided, use it to select candidate from oneOf
+
 	if len(s.Discriminator.Mapping) > 0 {
 		if ref, exists := s.Discriminator.Mapping[discStr]; exists {
 			for _, cand := range s.OneOf {
@@ -1159,7 +217,7 @@ func validateDiscriminator(instance any, s *Schema) error {
 			return fmt.Errorf("discriminator: no mapping defined for value %q", discStr)
 		}
 	} else {
-		// Otherwise, try to pick exactly one candidate that validates the instance.
+
 		validCount := 0
 		for _, cand := range s.OneOf {
 			if err := cand.Validate(instance); err == nil {
@@ -1183,203 +241,40 @@ var remoteCache = struct {
 }{schemas: make(map[string]*Schema)}
 
 func compileDraft2020Keywords(m map[string]any, schema *Schema) error {
-	if recAnchor, exists := m["$recursiveAnchor"]; exists {
-		if recBool, ok := recAnchor.(bool); ok {
-			schema.RecursiveAnchor = recBool
-		} else {
-			return fmt.Errorf("$recursiveAnchor must be a boolean")
-		}
+	var draft string = "2020-12"
+	if schema.compiler != nil && schema.compiler.Options != nil {
+		draft = schema.compiler.Options.DraftVersion
 	}
-	if vocab, exists := m["$vocabulary"]; exists {
-		if vocabMap, ok := vocab.(map[string]any); ok {
-			schema.Vocabulary = make(map[string]bool)
-			for k, v := range vocabMap {
-				if b, ok := v.(bool); ok {
-					schema.Vocabulary[k] = b
-				} else {
-					return fmt.Errorf("vocabulary value for '%s' must be a boolean", k)
+	switch draft {
+	case "2020-12":
+		if recAnchor, exists := m["$recursiveAnchor"]; exists {
+			if recBool, ok := recAnchor.(bool); ok {
+				schema.RecursiveAnchor = recBool
+			} else {
+				return fmt.Errorf("$recursiveAnchor must be a boolean")
+			}
+		}
+		if vocab, exists := m["$vocabulary"]; exists {
+			if vocabMap, ok := vocab.(map[string]any); ok {
+				schema.Vocabulary = make(map[string]bool)
+				for k, v := range vocabMap {
+					if b, ok := v.(bool); ok {
+						schema.Vocabulary[k] = b
+					} else {
+						return fmt.Errorf("vocabulary value for '%s' must be a boolean", k)
+					}
 				}
-			}
-		} else {
-			return fmt.Errorf("$vocabulary must be an object")
-		}
-	}
-	return nil
-}
-
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return new(bytes.Buffer)
-	},
-}
-
-func canonicalize(v any) (string, error) {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	if err := canonicalizeToBuffer(buf, v); err != nil {
-		bufferPool.Put(buf)
-		return "", err
-	}
-	result := buf.String()
-	bufferPool.Put(buf)
-	return result, nil
-}
-
-func canonicalizeToBuffer(buf *bytes.Buffer, v any) error {
-	switch t := v.(type) {
-	case map[string]any:
-		buf.WriteByte('{')
-
-		var keys []string
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for i, k := range keys {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-
-			b, err := json.Marshal(k)
-			if err != nil {
-				return err
-			}
-			buf.Write(b)
-			buf.WriteByte(':')
-			if err := canonicalizeToBuffer(buf, t[k]); err != nil {
-				return err
+			} else {
+				return fmt.Errorf("$vocabulary must be an object")
 			}
 		}
-		buf.WriteByte('}')
-	case []any:
-		buf.WriteByte('[')
-		for i, elem := range t {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			if err := canonicalizeToBuffer(buf, elem); err != nil {
-				return err
-			}
-		}
-		buf.WriteByte(']')
+		return nil
+	case "2019-09":
+
+		return nil
 	default:
-
-		b, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		buf.Write(b)
+		return fmt.Errorf("unsupported JSON Schema draft version: %s", draft)
 	}
-	return nil
-}
-
-func computeCacheKey(v any) (string, error) {
-	canonical, err := canonicalize(v)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(h[:]), nil
-}
-
-func toFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case int:
-		return float64(n), true
-	}
-	return 0, false
-}
-
-var formatValidators = map[string]func(string) error{
-	"email": func(value string) error {
-		_, err := mail.ParseAddress(value)
-		if err != nil {
-			return fmt.Errorf("invalid email: %v", err)
-		}
-		return nil
-	},
-	"uri": func(value string) error {
-		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" {
-			return fmt.Errorf("invalid URI")
-		}
-		return nil
-	},
-	"uri-reference": func(value string) error {
-		_, err := url.Parse(value)
-		if err != nil {
-			return fmt.Errorf("invalid URI reference: %v", err)
-		}
-		return nil
-	},
-	"date": func(value string) error {
-		_, err := date.Parse(value)
-		if err != nil {
-			return fmt.Errorf("invalid date: %v", err)
-		}
-		return nil
-	},
-	"date-time": func(value string) error {
-		if _, err := time.Parse(time.RFC3339, value); err != nil {
-			return fmt.Errorf("invalid date-time: %v", err)
-		}
-		return nil
-	},
-	"ipv4": func(value string) error {
-		if net.ParseIP(value) == nil || strings.Contains(value, ":") {
-			return fmt.Errorf("invalid IPv4 address")
-		}
-		return nil
-	},
-	"ipv6": func(value string) error {
-		if net.ParseIP(value) == nil || !strings.Contains(value, ":") {
-			return fmt.Errorf("invalid IPv6 address")
-		}
-		return nil
-	},
-	"hostname": func(value string) error {
-		if len(value) == 0 || len(value) > 253 {
-			return fmt.Errorf("invalid hostname length")
-		}
-		matched, err := regexp.MatchString(`^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost)$`, value)
-		if err != nil || !matched {
-			return fmt.Errorf("invalid hostname")
-		}
-		return nil
-	},
-	"uuid": func(value string) error {
-		matched, err := regexp.MatchString(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`, value)
-		if err != nil || !matched {
-			return fmt.Errorf("invalid UUID")
-		}
-		return nil
-	},
-	"json-pointer": func(value string) error {
-		if value != "" && !strings.HasPrefix(value, "/") {
-			return fmt.Errorf("invalid JSON pointer")
-		}
-		return nil
-	},
-	"relative-json-pointer": func(value string) error {
-		matched, err := regexp.MatchString(`^\d+(?:#(?:\/.*)?)?$`, value)
-		if err != nil || !matched {
-			return fmt.Errorf("invalid relative JSON pointer")
-		}
-		return nil
-	},
-}
-
-func RegisterFormatValidator(name string, validator func(string) error) {
-	formatValidators[name] = validator
-}
-
-func validateFormat(format, value string) error {
-	if fn, ok := formatValidators[format]; ok {
-		return fn(value)
-	}
-	return nil
 }
 
 var httpClient = &http.Client{
@@ -1419,35 +314,6 @@ func (s *Schema) resolveRemoteRef(ref string) (*Schema, error) {
 	remoteCache.schemas[ref] = remoteSchema
 	remoteCache.Unlock()
 	return remoteSchema, nil
-}
-
-func (c *Compiler) Compile(data []byte) (*Schema, error) {
-	var tmp any
-	if err := jsonmap.Unmarshal(data, &tmp); err != nil {
-		return nil, err
-	}
-	key, err := computeCacheKey(tmp)
-	if err != nil {
-		return nil, err
-	}
-	c.cacheMu.RLock()
-	if schema, ok := c.cache[key]; ok {
-		c.cacheMu.RUnlock()
-		return schema, nil
-	}
-	c.cacheMu.RUnlock()
-	parsed, err := ParseJSON(data)
-	if err != nil {
-		return nil, err
-	}
-	s, err := compileSchema(parsed, c, nil)
-	if err != nil {
-		return nil, err
-	}
-	c.cacheMu.Lock()
-	c.cache[key] = s
-	c.cacheMu.Unlock()
-	return s, nil
 }
 
 func (s *Schema) resolveRef(ref string) (*Schema, error) {
@@ -1625,7 +491,6 @@ func (s *Schema) validateAsType(candidate string, data any) error {
 }
 
 func validateSimpleConstraints(data any, s *Schema) error {
-
 	if str, ok := data.(string); ok {
 		if s.MaxLength != nil && float64(len(str)) > *s.MaxLength {
 			return fmt.Errorf("string length %d exceeds maxLength %v", len(str), *s.MaxLength)
@@ -1704,7 +569,7 @@ func (s *Schema) ValidateWithPath(unprepared any, instancePath string) error {
 				return fmt.Errorf("at %s: missing required field '%s'", instancePath, field)
 			}
 		}
-		// NEW: Check for additional properties not defined in the schema when AdditionalProperties is false.
+
 		if s.Properties != nil && s.AdditionalProperties != nil &&
 			s.AdditionalProperties.Boolean != nil && !*s.AdditionalProperties.Boolean {
 			var extras []string
@@ -2027,38 +892,6 @@ func (s *Schema) GenerateExample() (any, error) {
 	}
 }
 
-func evaluateExpression(exprStr string) (any, error) {
-	if strings.HasPrefix(exprStr, "{{") && strings.HasSuffix(exprStr, "}}") {
-		jsonStr := strings.ReplaceAll(exprStr, "'", "\"")
-		var m any
-		if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
-			return nil, err
-		}
-		return m, nil
-	}
-	vm, err := expr.Parse(exprStr)
-	if err != nil {
-		return nil, err
-	}
-	return vm.Eval(nil)
-}
-
-func prepareDefault(def any) (any, error) {
-	if def == nil {
-		return nil, nil
-	}
-	defStr, ok := def.(string)
-	if !ok {
-		return def, nil
-	}
-	if strings.HasPrefix(defStr, "{{") && strings.HasSuffix(defStr, "}}") {
-		trimmed := strings.TrimPrefix(defStr, "{{")
-		trimmed = strings.TrimSuffix(trimmed, "}}")
-		return evaluateExpression(trimmed)
-	}
-	return def, nil
-}
-
 func Unmarshal(data []byte, dest any, schemaBytes ...[]byte) error {
 	if len(schemaBytes) == 0 {
 		return json.Unmarshal(data, dest)
@@ -2175,7 +1008,7 @@ func validateApplicatorKeywords(instance any, s *Schema) error {
 			errs = append(errs, err.Error())
 		}
 	}
-	// NEW: if discriminator is set in a oneOf then use it
+
 	if len(s.OneOf) > 0 {
 		if s.Discriminator != nil {
 			if err := validateDiscriminator(instance, s); err != nil {
@@ -2315,382 +1148,6 @@ func getNestedValue(m map[string]any, field string) (any, bool) {
 	return value, true
 }
 
-func extractToken(authHeader string) (authType, token string, err error) {
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 {
-		return "", "", errors.New("invalid authorization header format")
-	}
-	authType = strings.TrimSpace(parts[0])
-	token = strings.TrimSpace(parts[1])
-	if authType == "" || token == "" {
-		return "", "", errors.New("authorization type or token is empty")
-	}
-	return authType, token, nil
-}
-
-func extractDataFromRequest(r *http.Request, in string, field *string) (any, error) {
-	switch strings.ToLower(in) {
-	case "query":
-		m := map[string]any{}
-		for k, v := range r.URL.Query() {
-			if len(v) == 1 {
-				m[k] = v[0]
-			} else {
-				m[k] = v
-			}
-		}
-		if field != nil && *field != "" {
-			if strings.Contains(*field, ".") {
-				if val, exists := getNestedValue(m, *field); exists {
-					return val, nil
-				}
-			} else {
-				if val, exists := m[*field]; exists {
-					return val, nil
-				}
-			}
-			return nil, fmt.Errorf("field %q not found in query", *field)
-		}
-		return m, nil
-	case "params":
-		if params, ok := r.Context().Value("params").(map[string]string); ok {
-			m := map[string]any{}
-			for k, v := range params {
-				m[k] = v
-			}
-			if field != nil && *field != "" {
-				if strings.Contains(*field, ".") {
-					if val, exists := getNestedValue(m, *field); exists {
-						return val, nil
-					}
-				} else {
-					if val, exists := m[*field]; exists {
-						return val, nil
-					}
-				}
-				return nil, fmt.Errorf("field %q not found in params", *field)
-			}
-			return m, nil
-		}
-		return nil, fmt.Errorf("no params found in context")
-	case "header":
-		m := map[string]any{}
-		for k, v := range r.Header {
-			if len(v) > 0 {
-				m[k] = v[0]
-			}
-		}
-		if field != nil && *field != "" {
-			if strings.EqualFold(*field, "Authorization") {
-				if val, exists := m["Authorization"]; exists {
-					strVal, _ := val.(string)
-					_, token, err := extractToken(strVal)
-					return token, err
-				}
-			} else if strings.EqualFold(*field, "authorization") {
-				if val, exists := m["authorization"]; exists {
-					strVal, _ := val.(string)
-					_, token, err := extractToken(strVal)
-					return token, err
-				}
-			}
-			if strings.Contains(*field, ".") {
-				if val, exists := getNestedValue(m, *field); exists {
-					return val, nil
-				}
-			} else {
-				if val, exists := m[*field]; exists {
-					return val, nil
-				}
-			}
-			return nil, fmt.Errorf("field %q not found in header", *field)
-		}
-		return m, nil
-	case "body":
-		fallthrough
-	default:
-		bodyBytes, err := io.ReadAll(r.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read request body: %v", err)
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-		var data any
-		if err := json.Unmarshal(bodyBytes, &data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal request body: %v", err)
-		}
-		if field != nil && *field != "" {
-			if m, ok := data.(map[string]any); ok {
-				if strings.Contains(*field, ".") {
-					if val, exists := getNestedValue(m, *field); exists {
-						return val, nil
-					}
-				} else {
-					if val, exists := m[*field]; exists {
-						return val, nil
-					}
-				}
-				return nil, fmt.Errorf("field %q not found in body", *field)
-			}
-			return nil, fmt.Errorf("request body is not a JSON object")
-		}
-		return data, nil
-	}
-}
-
-func (s *Schema) UnmarshalRequest(r *http.Request, dest any) error {
-	var data any
-	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
-		bodyData, err := extractDataFromRequest(r, "body", nil)
-		if err != nil {
-			bodyData = map[string]any{}
-		}
-		m, ok := bodyData.(map[string]any)
-		if !ok {
-			m = map[string]any{}
-		}
-		overrideFromRequest(r, m, s)
-		data = m
-	} else {
-		in := "body"
-		if s.In != nil && len(s.In) > 0 {
-			in = s.In[0]
-		}
-		var err error
-		data, err = extractDataFromRequest(r, in, s.Field)
-		if err != nil {
-			return err
-		}
-	}
-	merged, err := s.SmartUnmarshal(data)
-	if err != nil {
-		return err
-	}
-	mergedBytes, err := json.Marshal(merged)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(mergedBytes, dest); err != nil {
-		return err
-	}
-	return nil
-}
-
-// NEW: helper function to check if slice contains a value.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func overrideFromRequest(r *http.Request, data map[string]any, schema *Schema) {
-	for key, propSchema := range *schema.Properties {
-		// Only override if a valid "in" is defined and does not include "body".
-		if len(propSchema.In) > 0 && !contains(propSchema.In, "body") {
-			fieldName := key
-			if propSchema.Field != nil && *propSchema.Field != "" {
-				fieldName = *propSchema.Field
-			}
-			var val any
-			// Try each location in order.
-			for _, location := range propSchema.In {
-				if v, err := extractDataFromRequest(r, location, &fieldName); err == nil {
-					val = v
-					break
-				}
-			}
-			if val != nil {
-				if len(propSchema.Type) > 0 {
-					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
-						data[key] = conv
-					}
-				} else {
-					data[key] = val
-				}
-			} else {
-				delete(data, key)
-			}
-		}
-		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {
-			nested, ok := data[key].(map[string]any)
-			if !ok {
-				nested = map[string]any{}
-				data[key] = nested
-			}
-			overrideFromRequest(r, nested, propSchema)
-		}
-	}
-}
-
-func UnmarshalAndValidateRequest(r *http.Request, dest any, schemaBytes []byte) error {
-	compiler := NewCompiler()
-	schema, err := compiler.Compile(schemaBytes)
-	if err != nil {
-		return fmt.Errorf("failed to compile schema: %v", err)
-	}
-	return schema.UnmarshalRequest(r, dest)
-}
-
-type Ctx interface {
-	Params(key string, defaultVal ...string) string
-	Query(key string, defaultVal ...string) string
-	Body() []byte
-	Get(key string, defaultVal ...string) string
-	BodyParser(dest interface{}) error
-}
-
-func extractDataFromFiberCtx(ctx Ctx, in string, field *string) (any, error) {
-	switch strings.ToLower(in) {
-	case "header":
-		if field != nil && *field != "" {
-			hVal := ctx.Get(*field)
-			if strings.EqualFold(*field, "Authorization") {
-				_, token, err := extractToken(hVal)
-				return token, err
-			} else if strings.EqualFold(*field, "authorization") {
-				_, token, err := extractToken(hVal)
-				return token, err
-			}
-			return ctx.Get(*field), nil
-		}
-		return nil, errors.New("for header extraction, a field name must be provided")
-	case "query":
-		if field != nil && *field != "" {
-			val := ctx.Query(*field)
-			if val != "" {
-				return val, nil
-			}
-			var m map[string]any
-			if err := json.Unmarshal([]byte(ctx.Query("")), &m); err == nil && strings.Contains(*field, ".") {
-				if v, exists := getNestedValue(m, *field); exists {
-					return v, nil
-				}
-			}
-			return nil, errors.New("for query extraction, a valid field name must be provided")
-		}
-		return nil, errors.New("for query extraction, a field name must be provided")
-	case "params":
-		if field != nil && *field != "" {
-			val := ctx.Params(*field)
-			if val != "" {
-				return val, nil
-			}
-			var m map[string]any
-			if strings.Contains(*field, ".") {
-				if v, exists := getNestedValue(m, *field); exists {
-					return v, nil
-				}
-			}
-			return nil, errors.New("for params extraction, a valid field name must be provided")
-		}
-		return nil, errors.New("for params extraction, a field name must be provided")
-	case "body":
-		fallthrough
-	default:
-		if field != nil && *field != "" {
-			var m map[string]any
-			if err := ctx.BodyParser(&m); err != nil {
-				return nil, fmt.Errorf("failed to parse body: %v", err)
-			}
-			if strings.Contains(*field, ".") {
-				if val, exists := getNestedValue(m, *field); exists {
-					return val, nil
-				}
-			} else {
-				if val, exists := m[*field]; exists {
-					return val, nil
-				}
-			}
-			return nil, fmt.Errorf("field %q not found in body", *field)
-		}
-		var data any
-		bodyBytes := ctx.Body()
-		if err := json.Unmarshal(bodyBytes, &data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal body: %v", err)
-		}
-		return data, nil
-	}
-}
-
-func (s *Schema) UnmarshalFiberCtx(ctx Ctx, dest any) error {
-	var data any
-	if len(s.Type) == 1 && s.Type[0] == "object" && s.Properties != nil {
-		bodyData, err := extractDataFromFiberCtx(ctx, "body", nil)
-		if err != nil {
-			bodyData = map[string]any{}
-		}
-		m, ok := bodyData.(map[string]any)
-		if !ok {
-			m = map[string]any{}
-		}
-		overrideFromFiberCtx(ctx, m, s)
-		data = m
-	} else {
-		in := "body"
-		if s.In != nil && len(s.In) > 0 {
-			in = s.In[0]
-		}
-		var err error
-		data, err = extractDataFromFiberCtx(ctx, in, s.Field)
-		if err != nil {
-			return err
-		}
-	}
-	merged, err := s.SmartUnmarshal(data)
-	if err != nil {
-		return err
-	}
-	mergedBytes, err := json.Marshal(merged)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(mergedBytes, dest); err != nil {
-		return err
-	}
-	return nil
-}
-
-func overrideFromFiberCtx(ctx Ctx, data map[string]any, schema *Schema) {
-	for key, propSchema := range *schema.Properties {
-		if len(propSchema.In) > 0 && !contains(propSchema.In, "body") {
-			fieldName := key
-			if propSchema.Field != nil && *propSchema.Field != "" {
-				fieldName = *propSchema.Field
-			}
-			var val any
-			for _, location := range propSchema.In {
-				if v, err := extractDataFromFiberCtx(ctx, location, &fieldName); err == nil {
-					val = v
-					break
-				}
-			}
-			if val != nil {
-				if len(propSchema.Type) > 0 {
-					if conv, err := convertValue(val, propSchema.Type[0]); err == nil {
-						data[key] = conv
-					}
-				} else {
-					data[key] = val
-				}
-			} else {
-				// Remove value if not found in the designated source.
-				delete(data, key)
-			}
-		}
-		if len(propSchema.Type) > 0 && propSchema.Type[0] == "object" && propSchema.Properties != nil {
-			nested, ok := data[key].(map[string]any)
-			if !ok {
-				nested = map[string]any{}
-				data[key] = nested
-			}
-			overrideFromFiberCtx(ctx, nested, propSchema)
-		}
-	}
-}
-
-// NEW: Introduce asynchronous subschema compilation to boost performance.
 func compileSubschemaAsync(item any, compiler *Compiler, parent *Schema, result chan<- *Schema, errChan chan<- error) {
 	go func() {
 		subSchema, err := compileSchema(item, compiler, parent)
@@ -2700,4 +1157,21 @@ func compileSubschemaAsync(item any, compiler *Compiler, parent *Schema, result 
 		}
 		result <- subSchema
 	}()
+}
+
+var customKeywordValidators = map[string]func(s *Schema, keywordValue any) error{}
+
+func RegisterCustomKeyword(keyword string, validator func(s *Schema, keywordValue any) error) {
+	customKeywordValidators[keyword] = validator
+}
+
+func processCustomKeywords(m map[string]any, schema *Schema) error {
+	for key, val := range m {
+		if validator, exists := customKeywordValidators[key]; exists {
+			if err := validator(schema, val); err != nil {
+				return fmt.Errorf("custom keyword %q validation failed: %w", key, err)
+			}
+		}
+	}
+	return nil
 }
