@@ -1,9 +1,12 @@
+// Package jsonmap implements JSON encoding and decoding similar to encoding/json.
+// Note: For the Marshal([]byte) APIs the encoder is freshly allocated so that its
+// internal buffer can be returned directly (avoiding an extra copy). For streaming
+// scenarios, use NewEncoder to write directly to an io.Writer.
 package jsonmap
 
 import (
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -12,14 +15,6 @@ import (
 	"unicode/utf8"
 	"unsafe"
 )
-
-func b2s(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
-}
-
-type Marshaler interface {
-	MarshalJSON() ([]byte, error)
-}
 
 type Unmarshaler interface {
 	UnmarshalJSON([]byte) error
@@ -31,11 +26,6 @@ type DecoderOptions struct {
 	Lenient            bool
 }
 
-type EncoderOptions struct {
-	Pretty bool
-	Indent string
-}
-
 type decoder struct {
 	data    []byte
 	pos     int
@@ -43,6 +33,7 @@ type decoder struct {
 	options DecoderOptions
 }
 
+// errorf creates a formatted error message including context.
 func (d *decoder) errorf(msg string) error {
 	if d.options.WithErrorContext {
 		snippetEnd := d.pos + 20
@@ -55,6 +46,7 @@ func (d *decoder) errorf(msg string) error {
 	return errors.New(msg)
 }
 
+// skipWhitespace advances the position past any whitespace.
 func (d *decoder) skipWhitespace() {
 	for d.pos < d.len {
 		switch d.data[d.pos] {
@@ -66,6 +58,7 @@ func (d *decoder) skipWhitespace() {
 	}
 }
 
+// decodeValue decodes a JSON value.
 func (d *decoder) decodeValue() (any, error) {
 	d.skipWhitespace()
 	if d.pos >= d.len {
@@ -87,6 +80,7 @@ func (d *decoder) decodeValue() (any, error) {
 	}
 }
 
+// decodeObject decodes a JSON object.
 func (d *decoder) decodeObject() (map[string]any, error) {
 	obj := make(map[string]any)
 	d.pos++
@@ -122,7 +116,6 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		if d.data[d.pos] == ',' {
 			d.pos++
 			d.skipWhitespace()
-
 			if d.options.AllowTrailingComma && d.pos < d.len && d.data[d.pos] == '}' {
 				d.pos++
 				break
@@ -138,6 +131,7 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 	return obj, nil
 }
 
+// decodeArray decodes a JSON array.
 func (d *decoder) decodeArray() ([]any, error) {
 	arr := make([]any, 0, 8)
 	d.pos++
@@ -175,8 +169,9 @@ func (d *decoder) decodeArray() ([]any, error) {
 	return arr, nil
 }
 
+// decodeString decodes a JSON string.
 func (d *decoder) decodeString() (string, error) {
-	d.pos++
+	d.pos++ // skip initial quote
 	start := d.pos
 	noEscape := true
 	for d.pos < d.len {
@@ -194,10 +189,12 @@ func (d *decoder) decodeString() (string, error) {
 		}
 		d.pos++
 	}
+	// Reset position to start for a full escape decode.
 	d.pos = start
 	return d.decodeStringEscaped()
 }
 
+// decodeStringEscaped handles strings with escapes.
 func (d *decoder) decodeStringEscaped() (string, error) {
 	var runeBuffer [64]rune
 	var runes []rune
@@ -257,6 +254,7 @@ func (d *decoder) decodeStringEscaped() (string, error) {
 	return "", d.errorf("unterminated string")
 }
 
+// decodeNumber decodes a JSON number.
 func (d *decoder) decodeNumber() (float64, error) {
 	start := d.pos
 	for d.pos < d.len {
@@ -275,6 +273,7 @@ func (d *decoder) decodeNumber() (float64, error) {
 	return n, nil
 }
 
+// decodeBool decodes a JSON boolean.
 func (d *decoder) decodeBool() (bool, error) {
 	if d.pos+4 <= d.len && b2s(d.data[d.pos:d.pos+4]) == "true" {
 		d.pos += 4
@@ -287,6 +286,7 @@ func (d *decoder) decodeBool() (bool, error) {
 	return false, d.errorf("invalid boolean literal")
 }
 
+// decodeNull decodes a JSON null.
 func (d *decoder) decodeNull() (any, error) {
 	if d.pos+4 <= d.len && b2s(d.data[d.pos:d.pos+4]) == "null" {
 		d.pos += 4
@@ -295,13 +295,136 @@ func (d *decoder) decodeNull() (any, error) {
 	return nil, d.errorf("invalid null literal")
 }
 
+// captureValue returns the bytes for a JSON value.
+func (d *decoder) captureValue() ([]byte, error) {
+	start := d.pos
+	_, err := d.decodeValue()
+	if err != nil {
+		return nil, err
+	}
+	return d.data[start:d.pos], nil
+}
+
+// ---------------------------
+// Unmarshaling API (similar to encoding/json)
+// ---------------------------
+
+// Unmarshal parses the JSON-encoded data and stores the result in the value pointed to by v.
+func Unmarshal(data []byte, v any) error {
+	return UnmarshalWithOptions(data, v, DecoderOptions{})
+}
+
+// UnmarshalWithOptions is like Unmarshal but accepts custom decoding options.
+func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
+	if v == nil {
+		return errors.New("nil target provided")
+	}
+	switch target := v.(type) {
+	case *map[string]any:
+		d := newDecoder(data, opts)
+		d.skipWhitespace()
+		obj, err := d.decodeObject()
+		if err != nil {
+			return err
+		}
+		*target = obj
+		return nil
+	case *[]map[string]any:
+		d := newDecoder(data, opts)
+		d.skipWhitespace()
+		arrRaw, err := d.decodeArray()
+		if err != nil {
+			return err
+		}
+		out := make([]map[string]any, len(arrRaw))
+		for i, elem := range arrRaw {
+			m, ok := elem.(map[string]any)
+			if !ok {
+				return fmt.Errorf("element %d is not an object", i)
+			}
+			out[i] = m
+		}
+		*target = out
+		return nil
+	case *string:
+		d := newDecoder(data, opts)
+		s, err := d.decodeString()
+		if err != nil {
+			return err
+		}
+		*target = s
+		return nil
+	case *float64:
+		d := newDecoder(data, opts)
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		*target = n
+		return nil
+	case *int:
+		d := newDecoder(data, opts)
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		*target = int(n)
+		return nil
+	case *bool:
+		d := newDecoder(data, opts)
+		b, err := d.decodeBool()
+		if err != nil {
+			return err
+		}
+		*target = b
+		return nil
+	case *interface{}:
+		d := newDecoder(data, opts)
+		d.skipWhitespace()
+		val, err := d.decodeValue()
+		if err != nil {
+			return err
+		}
+		*target = val
+		return nil
+	}
+
+	// For other types, use reflection.
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return errors.New("target must be a non-nil pointer")
+	}
+	if rv.Elem().Kind() == reflect.Struct {
+		d := newDecoder(data, opts)
+		d.skipWhitespace()
+		return directDecodeStruct(d, rv.Elem())
+	}
+	return fmt.Errorf("unsupported type: %T", v)
+}
+
+// newDecoder creates a new decoder instance.
+func newDecoder(data []byte, opts DecoderOptions) *decoder {
+	return &decoder{
+		data:    data,
+		pos:     0,
+		len:     len(data),
+		options: opts,
+	}
+}
+
+// ----------------------------
+// Supporting reflection decode functions
+// ----------------------------
+
 type fieldInfo struct {
 	index []int
 	name  string
 }
 
+// structCache caches field information for struct types.
 var structCache sync.Map
 
+// getStructFields returns information about exported fields for a given struct type.
 func getStructFields(t reflect.Type) []fieldInfo {
 	if cached, ok := structCache.Load(t); ok {
 		return cached.([]fieldInfo)
@@ -309,8 +432,7 @@ func getStructFields(t reflect.Type) []fieldInfo {
 	var fields []fieldInfo
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-
-		if field.PkgPath != "" {
+		if field.PkgPath != "" { // unexported field
 			continue
 		}
 		key := field.Name
@@ -326,6 +448,7 @@ func getStructFields(t reflect.Type) []fieldInfo {
 	return fields
 }
 
+// directDecodeStruct decodes a JSON object into a struct value using reflection.
 func directDecodeStruct(d *decoder, v reflect.Value) error {
 	if d.pos >= d.len || d.data[d.pos] != '{' {
 		return d.errorf("expected '{' at beginning of object")
@@ -366,7 +489,6 @@ func directDecodeStruct(d *decoder, v reflect.Value) error {
 		d.skipWhitespace()
 		if fi, ok := fieldMap[key]; ok {
 			fv := v.FieldByIndex(fi.index)
-
 			if fv.CanAddr() && fv.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
 				raw, err := d.captureValue()
 				if err != nil {
@@ -382,7 +504,7 @@ func directDecodeStruct(d *decoder, v reflect.Value) error {
 				}
 			}
 		} else {
-
+			// Skip unknown field.
 			if _, err := d.decodeValue(); err != nil {
 				return err
 			}
@@ -392,15 +514,7 @@ func directDecodeStruct(d *decoder, v reflect.Value) error {
 	return nil
 }
 
-func (d *decoder) captureValue() ([]byte, error) {
-	start := d.pos
-	_, err := d.decodeValue()
-	if err != nil {
-		return nil, err
-	}
-	return d.data[start:d.pos], nil
-}
-
+// decodeValueDirect decodes a JSON value directly into a reflect.Value.
 func decodeValueDirect(d *decoder, v reflect.Value) error {
 	if v.CanAddr() && v.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
 		raw, err := d.captureValue()
@@ -445,7 +559,6 @@ func decodeValueDirect(d *decoder, v reflect.Value) error {
 		}
 		v.SetBool(b)
 	case reflect.Struct:
-
 		if v.Type() == reflect.TypeOf(time.Time{}) {
 			s, err := d.decodeString()
 			if err != nil {
@@ -478,7 +591,6 @@ func decodeValueDirect(d *decoder, v reflect.Value) error {
 		}
 		v.Set(ptrVal)
 	default:
-
 		val, err := d.decodeValue()
 		if err != nil {
 			return err
@@ -490,24 +602,7 @@ func decodeValueDirect(d *decoder, v reflect.Value) error {
 	return nil
 }
 
-func decodeStruct(v reflect.Value, data map[string]any) error {
-	fields := getStructFields(v.Type())
-	for _, info := range fields {
-		raw, exists := data[info.name]
-		if !exists {
-			continue
-		}
-		fv := v.FieldByIndex(info.index)
-		if !fv.CanSet() {
-			continue
-		}
-		if err := assignValue(fv, raw); err != nil {
-			return fmt.Errorf("field %q: %w", info.name, err)
-		}
-	}
-	return nil
-}
-
+// assignValue assigns a raw decoded value to a reflect.Value.
 func assignValue(fv reflect.Value, raw any) error {
 	if fv.CanAddr() && fv.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
 		bytes, err := Marshal(raw)
@@ -590,134 +685,30 @@ func assignValue(fv reflect.Value, raw any) error {
 	return nil
 }
 
-func Unmarshal(data []byte, v any) error {
-	return UnmarshalWithOptions(data, v, DecoderOptions{})
+// decodeStruct decodes an object into a struct.
+func decodeStruct(v reflect.Value, data map[string]any) error {
+	fields := getStructFields(v.Type())
+	for _, info := range fields {
+		raw, exists := data[info.name]
+		if !exists {
+			continue
+		}
+		fv := v.FieldByIndex(info.index)
+		if !fv.CanSet() {
+			continue
+		}
+		if err := assignValue(fv, raw); err != nil {
+			return fmt.Errorf("field %q: %w", info.name, err)
+		}
+	}
+	return nil
 }
 
-func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
-	if v == nil {
-		return errors.New("nil target provided")
-	}
-	switch target := v.(type) {
-	case *map[string]any:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		d.skipWhitespace()
-		obj, err := d.decodeObject()
-		if err != nil {
-			return err
-		}
-		*target = obj
-		return nil
-	case *[]map[string]any:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		d.skipWhitespace()
-		arrRaw, err := d.decodeArray()
-		if err != nil {
-			return err
-		}
-		out := make([]map[string]any, len(arrRaw))
-		for i, elem := range arrRaw {
-			m, ok := elem.(map[string]any)
-			if !ok {
-				return fmt.Errorf("element %d is not an object", i)
-			}
-			out[i] = m
-		}
-		*target = out
-		return nil
-	case *string:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		s, err := d.decodeString()
-		if err != nil {
-			return err
-		}
-		*target = s
-		return nil
-	case *float64:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		n, err := d.decodeNumber()
-		if err != nil {
-			return err
-		}
-		*target = n
-		return nil
-	case *int:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		n, err := d.decodeNumber()
-		if err != nil {
-			return err
-		}
-		*target = int(n)
-		return nil
-	case *bool:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		b, err := d.decodeBool()
-		if err != nil {
-			return err
-		}
-		*target = b
-		return nil
-	case *interface{}:
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		d.skipWhitespace()
-		val, err := d.decodeValue()
-		if err != nil {
-			return err
-		}
-		*target = val
-		return nil
-	}
+// ----------------------
+// Utility functions
+// ----------------------
 
-	rv := reflect.ValueOf(v)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
-		return errors.New("target must be a non-nil pointer")
-	}
-
-	if rv.Elem().Kind() == reflect.Struct {
-		d := getPooledDecoder(data, opts)
-		defer decoderPool.Put(d)
-		d.skipWhitespace()
-		return directDecodeStruct(d, rv.Elem())
-	}
-	return fmt.Errorf("unsupported type: %T", v)
-}
-
-var decoderPool = sync.Pool{
-	New: func() any { return &decoder{} },
-}
-
-func getPooledDecoder(data []byte, opts DecoderOptions) *decoder {
-	d := decoderPool.Get().(*decoder)
-	d.data = data
-	d.pos = 0
-	d.len = len(data)
-	d.options = opts
-	return d
-}
-
-type Decoder struct {
-	r    io.Reader
-	opts DecoderOptions
-}
-
-func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{
-		r:    r,
-		opts: DecoderOptions{},
-	}
-}
-
-func (d *Decoder) Decode(v any) error {
-	data, err := io.ReadAll(d.r)
-	if err != nil {
-		return err
-	}
-	return UnmarshalWithOptions(data, v, d.opts)
+// b2s converts a byte slice to a string without allocation.
+func b2s(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }

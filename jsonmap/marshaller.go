@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+type Marshaler interface {
+	MarshalJSON() ([]byte, error)
+}
+
+type EncoderOptions struct {
+	Pretty bool
+	Indent string
+}
+
 type encoder struct {
 	buf  []byte
 	opts EncoderOptions
