@@ -39,7 +39,7 @@ func (m RawMessage) MarshalJSON() ([]byte, error) {
 	if m == nil {
 		return []byte("null"), nil
 	}
-	return m, nil
+	return json.RawMessage(m).MarshalJSON()
 }
 
 // UnmarshalJSON sets *m to a copy of data.

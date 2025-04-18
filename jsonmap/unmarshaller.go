@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -16,9 +17,23 @@ func b2s(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }
 
+type Marshaler interface {
+	MarshalJSON() ([]byte, error)
+}
+
+type Unmarshaler interface {
+	UnmarshalJSON([]byte) error
+}
+
 type DecoderOptions struct {
 	AllowTrailingComma bool
 	WithErrorContext   bool
+	Lenient            bool
+}
+
+type EncoderOptions struct {
+	Pretty bool
+	Indent string
 }
 
 type decoder struct {
@@ -30,7 +45,12 @@ type decoder struct {
 
 func (d *decoder) errorf(msg string) error {
 	if d.options.WithErrorContext {
-		return fmt.Errorf("%s at pos %d", msg, d.pos)
+		snippetEnd := d.pos + 20
+		if snippetEnd > d.len {
+			snippetEnd = d.len
+		}
+		snippet := b2s(d.data[d.pos:snippetEnd])
+		return fmt.Errorf("%s at pos %d: near '%s'", msg, d.pos, snippet)
 	}
 	return errors.New(msg)
 }
@@ -101,8 +121,8 @@ func (d *decoder) decodeObject() (map[string]any, error) {
 		}
 		if d.data[d.pos] == ',' {
 			d.pos++
-
 			d.skipWhitespace()
+
 			if d.options.AllowTrailingComma && d.pos < d.len && d.data[d.pos] == '}' {
 				d.pos++
 				break
@@ -162,7 +182,6 @@ func (d *decoder) decodeString() (string, error) {
 	for d.pos < d.len {
 		c := d.data[d.pos]
 		if c == '"' {
-
 			if noEscape {
 				s := b2s(d.data[start:d.pos])
 				d.pos++
@@ -175,16 +194,15 @@ func (d *decoder) decodeString() (string, error) {
 		}
 		d.pos++
 	}
-
 	d.pos = start
 	return d.decodeStringEscaped()
 }
 
 func (d *decoder) decodeStringEscaped() (string, error) {
-	var runeStack [64]rune
+	var runeBuffer [64]rune
 	var runes []rune
 	if d.len-d.pos <= 64 {
-		runes = runeStack[:0]
+		runes = runeBuffer[:0]
 	} else {
 		runes = make([]rune, 0, d.len-d.pos)
 	}
@@ -308,21 +326,272 @@ func getStructFields(t reflect.Type) []fieldInfo {
 	return fields
 }
 
+func directDecodeStruct(d *decoder, v reflect.Value) error {
+	if d.pos >= d.len || d.data[d.pos] != '{' {
+		return d.errorf("expected '{' at beginning of object")
+	}
+	d.pos++
+	d.skipWhitespace()
+
+	fields := getStructFields(v.Type())
+	fieldMap := make(map[string]fieldInfo, len(fields))
+	for _, fi := range fields {
+		fieldMap[fi.name] = fi
+	}
+	first := true
+	for {
+		d.skipWhitespace()
+		if d.pos < d.len && d.data[d.pos] == '}' {
+			d.pos++
+			break
+		}
+		if !first {
+			if d.data[d.pos] != ',' {
+				return d.errorf("expected ',' between object fields")
+			}
+			d.pos++
+			d.skipWhitespace()
+		}
+		first = false
+
+		key, err := d.decodeString()
+		if err != nil {
+			return err
+		}
+		d.skipWhitespace()
+		if d.pos >= d.len || d.data[d.pos] != ':' {
+			return d.errorf("expected ':' after object key")
+		}
+		d.pos++
+		d.skipWhitespace()
+		if fi, ok := fieldMap[key]; ok {
+			fv := v.FieldByIndex(fi.index)
+
+			if fv.CanAddr() && fv.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
+				raw, err := d.captureValue()
+				if err != nil {
+					return err
+				}
+				um := fv.Addr().Interface().(Unmarshaler)
+				if err := um.UnmarshalJSON(raw); err != nil {
+					return fmt.Errorf("field %q: %w", key, err)
+				}
+			} else {
+				if err := decodeValueDirect(d, fv); err != nil {
+					return fmt.Errorf("field %q: %w", key, err)
+				}
+			}
+		} else {
+
+			if _, err := d.decodeValue(); err != nil {
+				return err
+			}
+		}
+		d.skipWhitespace()
+	}
+	return nil
+}
+
+func (d *decoder) captureValue() ([]byte, error) {
+	start := d.pos
+	_, err := d.decodeValue()
+	if err != nil {
+		return nil, err
+	}
+	return d.data[start:d.pos], nil
+}
+
+func decodeValueDirect(d *decoder, v reflect.Value) error {
+	if v.CanAddr() && v.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
+		raw, err := d.captureValue()
+		if err != nil {
+			return err
+		}
+		um := v.Addr().Interface().(Unmarshaler)
+		return um.UnmarshalJSON(raw)
+	}
+	switch v.Kind() {
+	case reflect.String:
+		s, err := d.decodeString()
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	case reflect.Float64:
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		v.SetFloat(n)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		v.SetInt(int64(n))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := d.decodeNumber()
+		if err != nil {
+			return err
+		}
+		if n < 0 {
+			return errors.New("negative number for unsigned type")
+		}
+		v.SetUint(uint64(n))
+	case reflect.Bool:
+		b, err := d.decodeBool()
+		if err != nil {
+			return err
+		}
+		v.SetBool(b)
+	case reflect.Struct:
+
+		if v.Type() == reflect.TypeOf(time.Time{}) {
+			s, err := d.decodeString()
+			if err != nil {
+				return err
+			}
+			t, err := time.Parse(time.RFC3339, s)
+			if err != nil {
+				return fmt.Errorf("invalid time format: %w", err)
+			}
+			v.Set(reflect.ValueOf(t))
+		} else {
+			return directDecodeStruct(d, v)
+		}
+	case reflect.Slice:
+		arr, err := d.decodeArray()
+		if err != nil {
+			return err
+		}
+		slice := reflect.MakeSlice(v.Type(), len(arr), len(arr))
+		for i := 0; i < len(arr); i++ {
+			if err := assignValue(slice.Index(i), arr[i]); err != nil {
+				return fmt.Errorf("index %d: %w", i, err)
+			}
+		}
+		v.Set(slice)
+	case reflect.Ptr:
+		ptrVal := reflect.New(v.Type().Elem())
+		if err := decodeValueDirect(d, ptrVal.Elem()); err != nil {
+			return err
+		}
+		v.Set(ptrVal)
+	default:
+
+		val, err := d.decodeValue()
+		if err != nil {
+			return err
+		}
+		if err := assignValue(v, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeStruct(v reflect.Value, data map[string]any) error {
+	fields := getStructFields(v.Type())
+	for _, info := range fields {
+		raw, exists := data[info.name]
+		if !exists {
+			continue
+		}
+		fv := v.FieldByIndex(info.index)
+		if !fv.CanSet() {
+			continue
+		}
+		if err := assignValue(fv, raw); err != nil {
+			return fmt.Errorf("field %q: %w", info.name, err)
+		}
+	}
+	return nil
+}
+
+func assignValue(fv reflect.Value, raw any) error {
+	if fv.CanAddr() && fv.Addr().Type().Implements(reflect.TypeOf((*Unmarshaler)(nil)).Elem()) {
+		bytes, err := Marshal(raw)
+		if err != nil {
+			return err
+		}
+		um := fv.Addr().Interface().(Unmarshaler)
+		return um.UnmarshalJSON(bytes)
+	}
+	if raw == nil {
+		fv.Set(reflect.Zero(fv.Type()))
+		return nil
+	}
+	switch fv.Kind() {
+	case reflect.String:
+		s, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", raw)
+		}
+		fv.SetString(s)
+	case reflect.Float64:
+		n, ok := raw.(float64)
+		if !ok {
+			return fmt.Errorf("expected float64, got %T", raw)
+		}
+		fv.SetFloat(n)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, ok := raw.(float64)
+		if !ok {
+			return fmt.Errorf("expected number for int, got %T", raw)
+		}
+		fv.SetInt(int64(n))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, ok := raw.(float64)
+		if !ok {
+			return fmt.Errorf("expected number for uint, got %T", raw)
+		}
+		if n < 0 {
+			return errors.New("negative number for unsigned field")
+		}
+		fv.SetUint(uint64(n))
+	case reflect.Bool:
+		b, ok := raw.(bool)
+		if !ok {
+			return fmt.Errorf("expected bool, got %T", raw)
+		}
+		fv.SetBool(b)
+	case reflect.Struct:
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("expected object for struct, got %T", raw)
+		}
+		return decodeStruct(fv, m)
+	case reflect.Slice:
+		arr, ok := raw.([]any)
+		if !ok {
+			return fmt.Errorf("expected array, got %T", raw)
+		}
+		slice := reflect.MakeSlice(fv.Type(), len(arr), len(arr))
+		for i := 0; i < len(arr); i++ {
+			if err := assignValue(slice.Index(i), arr[i]); err != nil {
+				return fmt.Errorf("index %d: %w", i, err)
+			}
+		}
+		fv.Set(slice)
+	case reflect.Ptr:
+		ptrVal := reflect.New(fv.Type().Elem())
+		if err := assignValue(ptrVal.Elem(), raw); err != nil {
+			return err
+		}
+		fv.Set(ptrVal)
+	default:
+		val := reflect.ValueOf(raw)
+		if !val.IsValid() {
+			fv.Set(reflect.Zero(fv.Type()))
+		} else {
+			fv.Set(val)
+		}
+	}
+	return nil
+}
+
 func Unmarshal(data []byte, v any) error {
 	return UnmarshalWithOptions(data, v, DecoderOptions{})
-}
-
-var decoderPool = sync.Pool{
-	New: func() any { return &decoder{} },
-}
-
-func getPooledDecoder(data []byte, opts DecoderOptions) *decoder {
-	d := decoderPool.Get().(*decoder)
-	d.data = data
-	d.pos = 0
-	d.len = len(data)
-	d.options = opts
-	return d
 }
 
 func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
@@ -420,207 +689,17 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 	return fmt.Errorf("unsupported type: %T", v)
 }
 
-func directDecodeStruct(d *decoder, v reflect.Value) error {
-	if d.pos >= d.len || d.data[d.pos] != '{' {
-		return d.errorf("expected '{' at beginning of object")
-	}
-	d.pos++
-	d.skipWhitespace()
-
-	fields := getStructFields(v.Type())
-	fieldMap := make(map[string]fieldInfo, len(fields))
-	for _, fi := range fields {
-		fieldMap[fi.name] = fi
-	}
-	first := true
-	for {
-		d.skipWhitespace()
-		if d.pos < d.len && d.data[d.pos] == '}' {
-			d.pos++
-			break
-		}
-		if !first {
-			if d.data[d.pos] != ',' {
-				return d.errorf("expected ',' between object fields")
-			}
-			d.pos++
-			d.skipWhitespace()
-		}
-		first = false
-
-		key, err := d.decodeString()
-		if err != nil {
-			return err
-		}
-		d.skipWhitespace()
-		if d.pos >= d.len || d.data[d.pos] != ':' {
-			return d.errorf("expected ':' after object key")
-		}
-		d.pos++
-		d.skipWhitespace()
-		if fi, ok := fieldMap[key]; ok {
-			fv := v.FieldByIndex(fi.index)
-			if !fv.CanSet() {
-
-				if _, err := d.decodeValue(); err != nil {
-					return err
-				}
-			} else {
-				if err := decodeValueDirect(d, fv); err != nil {
-					return fmt.Errorf("field %q: %w", key, err)
-				}
-			}
-		} else {
-
-			if _, err := d.decodeValue(); err != nil {
-				return err
-			}
-		}
-		d.skipWhitespace()
-	}
-	return nil
+var decoderPool = sync.Pool{
+	New: func() any { return &decoder{} },
 }
 
-func decodeValueDirect(d *decoder, v reflect.Value) error {
-	switch v.Kind() {
-	case reflect.String:
-		s, err := d.decodeString()
-		if err != nil {
-			return err
-		}
-		v.SetString(s)
-	case reflect.Float64:
-		n, err := d.decodeNumber()
-		if err != nil {
-			return err
-		}
-		v.SetFloat(n)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, err := d.decodeNumber()
-		if err != nil {
-			return err
-		}
-		v.SetInt(int64(n))
-	case reflect.Bool:
-		b, err := d.decodeBool()
-		if err != nil {
-			return err
-		}
-		v.SetBool(b)
-	case reflect.Struct:
-		return directDecodeStruct(d, v)
-	case reflect.Slice:
-		arr, err := d.decodeArray()
-		if err != nil {
-			return err
-		}
-		slice := reflect.MakeSlice(v.Type(), len(arr), len(arr))
-		for i := 0; i < len(arr); i++ {
-			if err := assignValue(slice.Index(i), arr[i]); err != nil {
-				return fmt.Errorf("index %d: %w", i, err)
-			}
-		}
-		v.Set(slice)
-	case reflect.Ptr:
-		ptrVal := reflect.New(v.Type().Elem())
-		if err := decodeValueDirect(d, ptrVal.Elem()); err != nil {
-			return err
-		}
-		v.Set(ptrVal)
-	default:
-
-		val, err := d.decodeValue()
-		if err != nil {
-			return err
-		}
-		if err := assignValue(v, val); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func decodeStruct(v reflect.Value, data map[string]any) error {
-	fields := getStructFields(v.Type())
-	for _, info := range fields {
-		raw, exists := data[info.name]
-		if !exists {
-			continue
-		}
-		fv := v.FieldByIndex(info.index)
-		if !fv.CanSet() {
-			continue
-		}
-		if err := assignValue(fv, raw); err != nil {
-			return fmt.Errorf("field %q: %w", info.name, err)
-		}
-	}
-	return nil
-}
-
-func assignValue(fv reflect.Value, raw any) error {
-	if raw == nil {
-		fv.Set(reflect.Zero(fv.Type()))
-		return nil
-	}
-	switch fv.Kind() {
-	case reflect.String:
-		s, ok := raw.(string)
-		if !ok {
-			return fmt.Errorf("expected string, got %T", raw)
-		}
-		fv.SetString(s)
-	case reflect.Float64:
-		n, ok := raw.(float64)
-		if !ok {
-			return fmt.Errorf("expected float64, got %T", raw)
-		}
-		fv.SetFloat(n)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, ok := raw.(float64)
-		if !ok {
-			return fmt.Errorf("expected number for int, got %T", raw)
-		}
-		fv.SetInt(int64(n))
-	case reflect.Bool:
-		b, ok := raw.(bool)
-		if !ok {
-			return fmt.Errorf("expected bool, got %T", raw)
-		}
-		fv.SetBool(b)
-	case reflect.Struct:
-		m, ok := raw.(map[string]any)
-		if !ok {
-			return fmt.Errorf("expected object for struct, got %T", raw)
-		}
-		return decodeStruct(fv, m)
-	case reflect.Slice:
-		arr, ok := raw.([]any)
-		if !ok {
-			return fmt.Errorf("expected array, got %T", raw)
-		}
-		slice := reflect.MakeSlice(fv.Type(), len(arr), len(arr))
-		for i := 0; i < len(arr); i++ {
-			if err := assignValue(slice.Index(i), arr[i]); err != nil {
-				return fmt.Errorf("index %d: %w", i, err)
-			}
-		}
-		fv.Set(slice)
-	case reflect.Ptr:
-		ptrVal := reflect.New(fv.Type().Elem())
-		if err := assignValue(ptrVal.Elem(), raw); err != nil {
-			return err
-		}
-		fv.Set(ptrVal)
-	default:
-		val := reflect.ValueOf(raw)
-		if !val.IsValid() {
-			fv.Set(reflect.Zero(fv.Type()))
-		} else {
-			fv.Set(val)
-		}
-	}
-	return nil
+func getPooledDecoder(data []byte, opts DecoderOptions) *decoder {
+	d := decoderPool.Get().(*decoder)
+	d.data = data
+	d.pos = 0
+	d.len = len(data)
+	d.options = opts
+	return d
 }
 
 type Decoder struct {

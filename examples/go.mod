@@ -1,6 +1,6 @@
 module github.com/oarkflow/json/examples
 
-go 1.23.0
+go 1.24.2
 
 replace github.com/oarkflow/json => ../
 
@@ -22,6 +22,6 @@ require (
 	github.com/oarkflow/expr v0.0.11 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasthttp v1.59.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
+	github.com/valyala/fasthttp v1.60.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
 )

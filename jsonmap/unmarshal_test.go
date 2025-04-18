@@ -3,8 +3,6 @@ package jsonmap
 import (
 	"encoding/json"
 	"testing"
-
-	goccy "github.com/goccy/go-json"
 )
 
 type Custom struct {
@@ -54,14 +52,6 @@ func BenchmarkStandardUnmarshal(b *testing.B) {
 		}
 	}
 }
-func BenchmarkGoccyUnmarshal(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		var result any
-		if err := goccy.Unmarshal(complexJSON, &result); err != nil {
-			b.Fatalf("standard json.Unmarshal error: %v", err)
-		}
-	}
-}
 
 func BenchmarkCustomUnmarshal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -75,13 +65,6 @@ func BenchmarkCustomUnmarshal(b *testing.B) {
 func BenchmarkStandardMarshal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := json.Marshal(complexData); err != nil {
-			b.Fatalf("standard json.Unmarshal error: %v", err)
-		}
-	}
-}
-func BenchmarkGoccyMarshal(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		if _, err := goccy.Marshal(complexData); err != nil {
 			b.Fatalf("standard json.Unmarshal error: %v", err)
 		}
 	}
