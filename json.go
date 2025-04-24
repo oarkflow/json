@@ -14,6 +14,8 @@ import (
 	"github.com/oarkflow/json/sjson"
 )
 
+type Delim = json.Delim
+
 func init() {
 	if marshaler == nil {
 		DefaultMarshaler()
