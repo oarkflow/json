@@ -5,6 +5,7 @@
 package jsonmap
 
 import (
+	stdJson "encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -14,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/oarkflow/json"
 )
 
 type Unmarshaler interface {
@@ -387,6 +390,54 @@ func UnmarshalWithOptions(data []byte, v any, opts DecoderOptions) error {
 		}
 		*target = val
 		return nil
+	case *[]byte:
+		d := newDecoder(data, opts)
+		raw, err := d.captureValue()
+		if err != nil {
+			return err
+		}
+		*target = raw
+		return nil
+	case *stdJson.RawMessage:
+		d := newDecoder(data, opts)
+		raw, err := d.captureValue()
+		if err != nil {
+			return err
+		}
+		*target = raw
+		return nil
+	case *[]stdJson.RawMessage:
+		d := newDecoder(data, opts)
+		rawArr, err := decodeStdRawMessageArray(d)
+		if err != nil {
+			return err
+		}
+		*target = rawArr
+		return nil
+	case *json.RawMessage:
+		d := newDecoder(data, opts)
+		raw, err := d.captureValue()
+		if err != nil {
+			return err
+		}
+		*target = raw
+		return nil
+	case *[]json.RawMessage:
+		d := newDecoder(data, opts)
+		rawArr, err := decodeRawMessageArray(d)
+		if err != nil {
+			return err
+		}
+		*target = rawArr
+		return nil
+	case *[][]byte:
+		d := newDecoder(data, opts)
+		rawArr, err := decodeRawByteSliceArray(d)
+		if err != nil {
+			return err
+		}
+		*target = rawArr
+		return nil
 	}
 
 	// For other types, use reflection.
@@ -702,6 +753,117 @@ func decodeStruct(v reflect.Value, data map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// Helper function to decode an array into []json.RawMessage.
+func decodeRawMessageArray(d *decoder) ([]json.RawMessage, error) {
+	d.skipWhitespace()
+	if d.pos >= d.len || d.data[d.pos] != '[' {
+		return nil, d.errorf("expected '[' at beginning of array")
+	}
+	d.pos++ // skip '['
+	d.skipWhitespace()
+	var arr []json.RawMessage
+	if d.pos < d.len && d.data[d.pos] == ']' {
+		d.pos++
+		return arr, nil
+	}
+	for {
+		d.skipWhitespace()
+		raw, err := d.captureValue()
+		if err != nil {
+			return nil, err
+		}
+		arr = append(arr, json.RawMessage(raw))
+		d.skipWhitespace()
+		if d.pos >= d.len {
+			return nil, d.errorf("unexpected end of array")
+		}
+		if d.data[d.pos] == ',' {
+			d.pos++
+			d.skipWhitespace()
+		} else if d.data[d.pos] == ']' {
+			d.pos++
+			break
+		} else {
+			return nil, d.errorf("expected ',' or ']' in array")
+		}
+	}
+	return arr, nil
+}
+
+// Helper function to decode an array into []json.RawMessage.
+func decodeStdRawMessageArray(d *decoder) ([]stdJson.RawMessage, error) {
+	d.skipWhitespace()
+	if d.pos >= d.len || d.data[d.pos] != '[' {
+		return nil, d.errorf("expected '[' at beginning of array")
+	}
+	d.pos++ // skip '['
+	d.skipWhitespace()
+	var arr []stdJson.RawMessage
+	if d.pos < d.len && d.data[d.pos] == ']' {
+		d.pos++
+		return arr, nil
+	}
+	for {
+		d.skipWhitespace()
+		raw, err := d.captureValue()
+		if err != nil {
+			return nil, err
+		}
+		arr = append(arr, raw)
+		d.skipWhitespace()
+		if d.pos >= d.len {
+			return nil, d.errorf("unexpected end of array")
+		}
+		if d.data[d.pos] == ',' {
+			d.pos++
+			d.skipWhitespace()
+		} else if d.data[d.pos] == ']' {
+			d.pos++
+			break
+		} else {
+			return nil, d.errorf("expected ',' or ']' in array")
+		}
+	}
+	return arr, nil
+}
+
+// Helper function to decode an array into [][]byte.
+func decodeRawByteSliceArray(d *decoder) ([][]byte, error) {
+	d.skipWhitespace()
+	if d.pos >= d.len || d.data[d.pos] != '[' {
+		return nil, d.errorf("expected '[' at beginning of array")
+	}
+	d.pos++ // skip '['
+	d.skipWhitespace()
+	var arr [][]byte
+	if d.pos < d.len && d.data[d.pos] == ']' {
+		d.pos++
+		return arr, nil
+	}
+	for {
+		d.skipWhitespace()
+		raw, err := d.captureValue()
+		if err != nil {
+			return nil, err
+		}
+		arr = append(arr, raw)
+		d.skipWhitespace()
+		if d.pos >= d.len {
+			return nil, d.errorf("unexpected end of array")
+		}
+		if d.data[d.pos] == ',' {
+			d.pos++
+			d.skipWhitespace()
+		} else if d.data[d.pos] == ']' {
+			d.pos++
+			break
+		} else {
+			return nil, d.errorf("expected ',' or ']' in array")
+		}
+	}
+	return arr, nil
 }
 
 // ----------------------

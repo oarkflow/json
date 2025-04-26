@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/oarkflow/json"
 	"github.com/oarkflow/json/jsonmap"
 )
 
@@ -39,7 +40,7 @@ var complexJSON = []byte(`{
 	}`)
 
 func main() {
-	var result T
+	var result json.RawMessage
 	if err := jsonmap.Unmarshal(complexJSON, &result); err != nil {
 		panic(err)
 	}
