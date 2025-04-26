@@ -872,5 +872,17 @@ func decodeRawByteSliceArray(d *decoder) ([][]byte, error) {
 
 // b2s converts a byte slice to a string without allocation.
 func b2s(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	lenB := len(b)
+	if lenB == 0 {
+		return ""
+	}
+	return unsafe.String(&b[0], lenB)
+}
+
+func s2b(s string) []byte {
+	lenS := len(s)
+	if lenS == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(s), lenS)
 }
