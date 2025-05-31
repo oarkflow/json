@@ -181,6 +181,18 @@ func compileDraft2020Keywords(m map[string]any, schema *Schema) error {
 				return fmt.Errorf("$vocabulary must be an object")
 			}
 		}
+		// NEW: Validate required vocabularies from compiler Options.
+		if schema.compiler != nil && schema.compiler.Options != nil && schema.compiler.Options.VocabularyConfig != nil {
+			if req, ok := schema.compiler.Options.VocabularyConfig["required"]; ok {
+				if reqArr, ok := req.([]string); ok {
+					for _, vocab := range reqArr {
+						if schema.Vocabulary == nil || !schema.Vocabulary[vocab] {
+							return fmt.Errorf("required vocabulary %q is not declared", vocab)
+						}
+					}
+				}
+			}
+		}
 		return nil
 	case "2019-09":
 
@@ -579,12 +591,41 @@ func validatePatternProperties(obj map[string]any, s *Schema) error {
 }
 
 func validateUnevaluatedProperties(obj map[string]any, s *Schema) error {
-	if s.UnevaluatedProperties == nil {
+	// If a schema for unevaluatedProperties exists, delegate to it.
+	if s.UnevaluatedProperties != nil {
+		for key, val := range obj {
+			if err := s.UnevaluatedProperties.Validate(val); err != nil {
+				return fmt.Errorf("unevaluatedProperties: key %q: %v", key, err)
+			}
+		}
 		return nil
 	}
-	for key, val := range obj {
-		if err := s.UnevaluatedProperties.Validate(val); err != nil {
-			return fmt.Errorf("unevaluatedProperties: key %q: %v", key, err)
+	// NEW: If a boolean flag is defined and is false, then no extra properties are allowed.
+	if s.UnevaluatedPropertiesBool != nil && !*s.UnevaluatedPropertiesBool {
+		// Assume that properties and patternProperties have already been validated.
+		// Here you could hook into the evaluation tracking to check for leftover keys.
+		// For simplicity, we assume any key not defined in properties or matched by patternProperties is extra.
+		for key := range obj {
+			inProp := false
+			if s.Properties != nil {
+				if _, exists := (*s.Properties)[key]; exists {
+					inProp = true
+				}
+			}
+			if !inProp && s.PatternProperties != nil {
+				matched := false
+				for pattern := range *s.PatternProperties {
+					re, err := getCompiledRegex(pattern)
+					if err == nil && re.MatchString(key) {
+						matched = true
+						break
+					}
+				}
+				inProp = matched
+			}
+			if !inProp {
+				return fmt.Errorf("unevaluatedProperties not allowed: extra key %q", key)
+			}
 		}
 	}
 	return nil

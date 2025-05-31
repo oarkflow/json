@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gofiber/fiber/v2"
+
 	v2 "github.com/oarkflow/json/jsonschema/v2"
 
 	"github.com/oarkflow/json/examples/models"

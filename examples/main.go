@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-
+	
 	v2 "github.com/oarkflow/json/jsonschema/v2"
 )
 
@@ -11,6 +11,7 @@ var data1 = map[string]any{"last_name": "Alice"}
 
 var data2 = map[string]any{
 	"last_name": "Alice",
+	"age":       12,
 }
 
 func main() {
@@ -24,12 +25,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	_, err1 := schema.SmartUnmarshal(data1)
+	d1, err1 := schema.SmartUnmarshal(data1)
 	if err1 != nil {
 		fmt.Println(err1, err)
 	}
-	_, err2 := schema.SmartUnmarshal(data2)
+	d2, err2 := schema.SmartUnmarshal(data2)
 	if err2 != nil {
 		fmt.Println(err2, err)
 	}
+	fmt.Println(d1, d2)
 }

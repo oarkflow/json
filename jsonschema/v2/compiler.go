@@ -786,3 +786,28 @@ func processConditionalRequired(m map[string]any, schema *Schema) {
 		}
 	}
 }
+
+// NEW: Added DefaultMetaSchema returns a canonical 2020-12 meta-schema.
+func (c *Compiler) DefaultMetaSchema() *Schema {
+	// This is an enhanced meta-schema for 2020‑12 that covers core, applicator, validation, format, and content vocabularies.
+	metaSchemaJSON := []byte(`{
+		"$id": "https://json-schema.org/draft/2020-12/schema",
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"title": "Core schema meta‑schema",
+		"type": ["object", "boolean"],
+		"$vocabulary": {
+			"https://json-schema.org/draft/2020-12/vocab/core": true,
+			"https://json-schema.org/draft/2020-12/vocab/applicator": true,
+			"https://json-schema.org/draft/2020-12/vocab/validation": true,
+			"https://json-schema.org/draft/2020-12/vocab/meta-data": true,
+			"https://json-schema.org/draft/2020-12/vocab/format": true,
+			"https://json-schema.org/draft/2020-12/vocab/content": true
+		}
+	}`)
+	schema, err := c.Compile(metaSchemaJSON)
+	if err != nil {
+		// In production you might want to handle this error differently.
+		return nil
+	}
+	return schema
+}

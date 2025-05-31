@@ -89,6 +89,13 @@ var formatValidators = map[string]func(string) error{
 		}
 		return nil
 	},
+	"uri-template": func(value string) error {
+		// Basic validation: ensure template has variable markers.
+		if !strings.Contains(value, "{") || !strings.Contains(value, "}") {
+			return fmt.Errorf("invalid uri-template: missing variable braces")
+		}
+		return nil
+	},
 }
 
 func RegisterFormatValidator(name string, validator func(string) error) {
